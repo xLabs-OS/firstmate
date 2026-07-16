@@ -24,7 +24,7 @@ A scout report is evidence and a recommendation, not authority for unapproved im
 A precise scout does not make a weak model safe for high-risk work.
 Model fit must reflect ambiguity, risk, blast radius, and the selected tier rather than report precision alone.
 The inputs and outputs are Markdown instruction contracts, and enforcement in this version is a static shell test rather than a runtime parser or new CLI schema.
-Readiness outcomes are the only new state transitions, so existing scout lifecycle, promotion, and teardown mechanics remain unchanged.
+Readiness outcomes are report verdicts, so this contract does not alter existing scout lifecycle, promotion, or teardown mechanics.
 Instruction-level idempotency and concurrency rely on evidence refresh, exact-head checks, and overlap detection before dispatch.
 
 ## Proportionality tiers
