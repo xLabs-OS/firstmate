@@ -103,13 +103,10 @@ See [`wedge-alarm.md`](wedge-alarm.md) for the channel reference and macOS verif
 
 ## Gate defaults (.no-mistakes.yaml)
 
-The tracked `.no-mistakes.yaml` keeps test evidence outside the repo, pins lint to `bin/fm-lint.sh`, and defines `commands.test` as a trusted target-main test-selector loader.
+The tracked `.no-mistakes.yaml` keeps test evidence outside the repo and defines `commands.test` so no-mistakes runs firstmate's bash behavior suite directly.
 That evidence policy is specific to the firstmate repo: target projects may legitimately commit `.no-mistakes/evidence/` from their own no-mistakes pipeline, but firstmate keeps `.no-mistakes/` local and CI rejects tracked entries under that path.
-The loader clones `main`, reads `bin/fm-test-select.sh` only from that target revision, and runs its `gate-shadow` command.
-The selector may shadow its one exact focused mapping for local feedback parity, but it always runs the complete lexical `tests/*.test.sh` inventory and propagates every failure before delivery.
-Any unavailable or mismatched trusted selector blocks the gate rather than running branch-controlled policy; only when target `main` has no selector does the loader use its fixed complete-suite bootstrap fallback.
-Complete execution requires `tmux` on `PATH`, prints `tmux -V`, and runs every inventory member with `bash` without stopping at the first failure.
-CI retains the behavior-test baseline and additional platform-specific compatibility lanes; the gate does not delegate test-policy selection to an agent or the branch under review.
+That command requires `tmux` on `PATH`, prints `tmux -V`, runs every `tests/*.test.sh` with `bash`, and fails if any script exits non-zero.
+It intentionally mirrors the behavior-test baseline in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) instead of delegating the test step to an agent.
 
 ## Captain preferences (data/captain.md)
 
