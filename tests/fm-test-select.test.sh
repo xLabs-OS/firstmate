@@ -80,7 +80,9 @@ setup_fixture() {
   done
   write_pass_test "$WORK/tests/a-pass.test.sh" a-pass
   write_pass_test "$WORK/tests/z-pass.test.sh" z-pass
-  git -C "$WORK" add tests
+  command cp "$SELECTOR" "$WORK/bin/fm-test-select.sh"
+  chmod +x "$WORK/bin/fm-test-select.sh"
+  git -C "$WORK" add tests bin/fm-test-select.sh
   git -C "$WORK" commit -qm 'test: slim selector fixture inventory'
   git -C "$WORK" push -q origin main
   git -C "$WORK" checkout -qb feature
@@ -151,6 +153,45 @@ SH
   chmod +x "$WORK/tests/z-pass.test.sh"
   git -C "$WORK" add tests/z-pass.test.sh
   git -C "$WORK" commit -qm 'test: target concurrent mutation fixture'
+  git -C "$WORK" push -q origin main
+  git -C "$WORK" checkout -qB feature main
+}
+
+advance_target_selector_identity() {
+  git -C "$WORK" checkout -q main
+  printf '\n# changed target selector identity\n' >> "$WORK/bin/fm-test-select.sh"
+  git -C "$WORK" add bin/fm-test-select.sh
+  git -C "$WORK" commit -qm 'test: change target selector identity'
+  git -C "$WORK" push -q origin main
+  git -C "$WORK" checkout -qB feature main
+}
+
+advance_target_with_final_marker() {
+  git -C "$WORK" checkout -q main
+  cat > "$WORK/tests/z-pass.test.sh" <<'SH'
+#!/usr/bin/env bash
+set -eu
+: > "${FM_SELECTOR_FINAL_MARKER:?}"
+printf 'ok - fixture final snapshot marker\n'
+SH
+  chmod +x "$WORK/tests/z-pass.test.sh"
+  git -C "$WORK" add tests/z-pass.test.sh
+  git -C "$WORK" commit -qm 'test: add final snapshot marker'
+  git -C "$WORK" push -q origin main
+  git -C "$WORK" checkout -qB feature main
+}
+
+advance_target_with_signal_test() {
+  git -C "$WORK" checkout -q main
+  cat > "$WORK/tests/00-signal.test.sh" <<'SH'
+#!/usr/bin/env bash
+set -eu
+kill -TERM "$PPID"
+sleep 1
+SH
+  chmod +x "$WORK/tests/00-signal.test.sh"
+  git -C "$WORK" add tests/00-signal.test.sh
+  git -C "$WORK" commit -qm 'test: add selector signal fixture'
   git -C "$WORK" push -q origin main
   git -C "$WORK" checkout -qB feature main
 }
@@ -343,8 +384,7 @@ test_shared_test_infra() {
 
 test_selector_self_change() {
   setup_fixture
-  cp "$SELECTOR" "$WORK/bin/fm-test-select.sh"
-  chmod +x "$WORK/bin/fm-test-select.sh"
+  printf '\n# selector self-change fixture\n' >> "$WORK/bin/fm-test-select.sh"
   run_selector local
   expect_code 0 "$RC" selector-self-change
   assert_receipt_field classification complete
@@ -571,6 +611,145 @@ test_concurrent_change() {
   pass "concurrent-change"
 }
 
+test_gate_selector_identity() {
+  setup_fixture
+  advance_target_selector_identity
+  printf '\n<!-- eligible stale-selector fixture -->\n' \
+    >> "$WORK/.agents/skills/scout-implementation-contract/SKILL.md"
+  commit_all 'test: eligible change over new target selector'
+  run_selector gate-shadow
+  expect_code 70 "$RC" gate-selector-identity
+  assert_one_terminal_receipt
+  assert_receipt_field reason trusted-selector-mismatch
+  assert_receipt_field focus_execution skipped
+  assert_receipt_field full_execution skipped
+  assert_receipt_field result error
+  pass "gate-selector-identity"
+}
+
+test_target_moves_during_final_snapshot() {
+  local marker moved target_tip tree mover_pid mover_rc=0 current i=1
+  setup_fixture
+  advance_target_with_final_marker
+  mkdir -p "$WORK/bulk-final-snapshot"
+  while [ "$i" -le 400 ]; do
+    printf 'final snapshot inventory %04d\n' "$i" \
+      > "$WORK/bulk-final-snapshot/item-$i.txt"
+    i=$((i + 1))
+  done
+  target_tip=$(git -C "$WORK" rev-parse main)
+  tree=$(git -C "$WORK" rev-parse 'main^{tree}')
+  moved=$(printf 'moved target\n' | git -C "$WORK" commit-tree "$tree" -p "$target_tip")
+  git -C "$WORK" push -q origin "$moved:refs/heads/selector-moved"
+  marker="$TMP/final-snapshot.marker"
+  (
+    attempts=0
+    while [ ! -e "$marker" ] && [ "$attempts" -lt 500 ]; do
+      sleep 0.01
+      attempts=$((attempts + 1))
+    done
+    [ -e "$marker" ] || exit 1
+    sleep 0.1
+    git --git-dir="$REMOTE" update-ref refs/heads/main "$moved"
+  ) &
+  mover_pid=$!
+  run_selector full FM_SELECTOR_FINAL_MARKER="$marker"
+  wait "$mover_pid" || mover_rc=$?
+  [ "$mover_rc" -eq 0 ] || fail "target mover did not complete"
+  current=$(git --git-dir="$REMOTE" rev-parse refs/heads/main)
+  [ "$current" = "$moved" ] || fail "target main did not move during the fixture"
+  expect_code 75 "$RC" target-moves-during-final-snapshot
+  assert_one_terminal_receipt
+  assert_receipt_field snapshot_stability changed
+  assert_receipt_field reason concurrent-snapshot-change
+  assert_receipt_field result error
+  assert_not_contains "$(receipt)" "result=pass" "target movement emitted a pass receipt"
+  pass "target-moves-during-final-snapshot"
+}
+
+test_signal_receipt_cleanup() {
+  local selector_tmp remaining
+  setup_fixture
+  advance_target_with_signal_test
+  selector_tmp="$TMP/selector temp [safe]"
+  mkdir -p "$selector_tmp"
+  run_selector full TMPDIR="$selector_tmp"
+  expect_code 70 "$RC" signal-receipt-cleanup
+  assert_one_terminal_receipt
+  assert_receipt_field reason terminated-by-signal
+  assert_receipt_field full_execution interrupted
+  assert_receipt_field snapshot_stability unavailable
+  assert_receipt_field result error
+  remaining=$(find "$selector_tmp" -mindepth 1 -print -quit)
+  [ -z "$remaining" ] || fail "signal exit left selector temporary state behind"
+  pass "signal-receipt-cleanup"
+}
+
+test_explicit_full_dirty_count() {
+  setup_fixture
+  printf '\n<!-- explicit full committed fixture -->\n' \
+    >> "$WORK/.agents/skills/scout-implementation-contract/SKILL.md"
+  commit_all 'test: explicit full committed layer'
+  printf '\nexplicit full index layer\n' >> "$WORK/README.md"
+  git -C "$WORK" add README.md
+  printf '\nexplicit full worktree layer\n' >> "$WORK/CONTRIBUTING.md"
+  printf 'explicit full untracked layer\n' > "$WORK/explicit-full-untracked.txt"
+  run_selector full
+  expect_code 0 "$RC" explicit-full-dirty-count
+  assert_one_terminal_receipt
+  assert_receipt_field worktree_state dirty
+  assert_receipt_field classification complete
+  assert_receipt_field reason explicit-full
+  assert_receipt_field diff_count 4
+  assert_receipt_field full_execution pass
+  assert_receipt_field result pass
+  pass "explicit-full-dirty-count"
+}
+
+test_loader_cleanup_safety() {
+  local config="$ROOT/.no-mistakes.yaml" loader fakebin loader_root keep rc=0 remaining
+  setup_fixture
+  assert_grep 'cleanup() { rm -rf -- "$tmp_dir"; }' "$config" \
+    "trusted loader cleanup is not a quoted static function"
+  assert_grep 'trap cleanup EXIT' "$config" "trusted loader does not install the static cleanup trap"
+  assert_no_grep 'trap "rm -rf' "$config" "trusted loader reparses an expanded cleanup path"
+  loader=$(sed -n "s/^  test: '\(.*\)'$/\1/p" "$config")
+  [ -n "$loader" ] || fail "could not extract trusted loader command"
+  fakebin="$TMP/loader-fakebin"
+  loader_root="$TMP/nontrivial safe [loader root]"
+  keep="$TMP/keep me"
+  mkdir -p "$fakebin" "$loader_root" "$keep"
+  cat > "$fakebin/git" <<'SH'
+#!/bin/bash
+set -eu
+case "${1:-}" in
+  clone)
+    last=
+    for arg in "$@"; do
+      last=$arg
+    done
+    mkdir -p "$last"
+    ;;
+  -C)
+    [ "${3:-}" = show ] || exit 2
+    printf '#!/usr/bin/env bash\nexit 0\n'
+    ;;
+  *) exit 2 ;;
+esac
+SH
+  cat > "$fakebin/bash" <<'SH'
+#!/bin/bash
+exit 17
+SH
+  chmod +x "$fakebin/git" "$fakebin/bash"
+  PATH="$fakebin:$PATH" TMPDIR="$loader_root" /bin/sh -c "$loader" || rc=$?
+  expect_code 17 "$rc" loader-child-status
+  assert_present "$keep" "trusted loader cleanup removed a sibling path"
+  remaining=$(find "$loader_root" -mindepth 1 -print -quit)
+  [ -z "$remaining" ] || fail "trusted loader did not remove only its created directory"
+  pass "loader-cleanup-safety"
+}
+
 CASES=(
   eligible-skill
   eligible-trigger
@@ -603,6 +782,11 @@ CASES=(
   shadow-full-fails
   shadow-focus-fails
   concurrent-change
+  gate-selector-identity
+  target-moves-during-final-snapshot
+  signal-receipt-cleanup
+  explicit-full-dirty-count
+  loader-cleanup-safety
 )
 
 run_case() {
@@ -638,6 +822,11 @@ run_case() {
     shadow-full-fails) test_shadow_full_fails ;;
     shadow-focus-fails) test_shadow_focus_fails ;;
     concurrent-change) test_concurrent_change ;;
+    gate-selector-identity) test_gate_selector_identity ;;
+    target-moves-during-final-snapshot) test_target_moves_during_final_snapshot ;;
+    signal-receipt-cleanup) test_signal_receipt_cleanup ;;
+    explicit-full-dirty-count) test_explicit_full_dirty_count ;;
+    loader-cleanup-safety) test_loader_cleanup_safety ;;
     *) fail "unknown selector test case: $1" ;;
   esac
 }

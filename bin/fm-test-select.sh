@@ -75,6 +75,12 @@ case "$1" in
     ;;
 esac
 
+SELECTOR_SOURCE=${BASH_SOURCE[0]}
+case "$SELECTOR_SOURCE" in
+  /*) ;;
+  *) SELECTOR_SOURCE="$(pwd -P)/$SELECTOR_SOURCE" ;;
+esac
+
 # Receipt fields default to documented unavailable/skipped values so failures
 # never imply that an observation or a test run occurred.
 TARGET_BASE_TIP=unavailable
@@ -82,7 +88,7 @@ MERGE_BASE=unavailable
 HEAD_SHA=unavailable
 WORKTREE_STATE=unavailable
 DIFF_DIGEST=unavailable
-DIFF_COUNT=0
+DIFF_COUNT=unavailable
 CLASSIFICATION=complete
 REASON=unavailable
 LOCAL_PLAN=full
@@ -95,11 +101,36 @@ FULL_RESULTS=unavailable
 COMPARISON=not-applicable
 SNAPSHOT_STABILITY=unavailable
 RESULT=error
+RECEIPT_EMITTED=false
 
 emit_receipt() {
+  if "$RECEIPT_EMITTED"; then
+    return 0
+  fi
+  RECEIPT_EMITTED=true
   printf '%s\n' \
     "firstmate.test-selection.v1 policy_version=$POLICY_VERSION context=$CONTEXT target_base_ref=$TARGET_BASE_REF target_base_tip=$TARGET_BASE_TIP merge_base=$MERGE_BASE head=$HEAD_SHA worktree_state=$WORKTREE_STATE diff_digest=$DIFF_DIGEST diff_count=$DIFF_COUNT classification=$CLASSIFICATION reason=$REASON local_plan=$LOCAL_PLAN gate_plan=$GATE_PLAN ordered_tests=$ORDERED_TESTS focus_execution=$FOCUS_EXECUTION focus_results=$FOCUS_RESULTS full_execution=$FULL_EXECUTION full_results=$FULL_RESULTS comparison=$COMPARISON snapshot_stability=$SNAPSHOT_STABILITY result=$RESULT"
 }
+
+# shellcheck disable=SC2329 # Invoked by the signal trap below.
+handle_signal() {
+  trap - HUP INT TERM
+  REASON=terminated-by-signal
+  RESULT=error
+  SNAPSHOT_STABILITY=unavailable
+  if [ "$FOCUS_EXECUTION" = running ]; then
+    FOCUS_EXECUTION=interrupted
+    FOCUS_RESULTS=unavailable
+  fi
+  if [ "$FULL_EXECUTION" = running ]; then
+    FULL_EXECUTION=interrupted
+    FULL_RESULTS=unavailable
+  fi
+  emit_receipt
+  exit 70
+}
+
+trap handle_signal HUP INT TERM
 
 coverage_error() {
   REASON=$1
@@ -143,8 +174,11 @@ chmod 700 "$TMP_ROOT" 2>/dev/null || {
   rm -rf "$TMP_ROOT"
   coverage_error temporary-storage-unavailable "cannot restrict temporary storage"
 }
-trap 'rm -rf "$TMP_ROOT"' EXIT
-trap 'exit 70' HUP INT TERM
+# shellcheck disable=SC2329 # Invoked by the EXIT trap below.
+cleanup_selector() {
+  rm -rf -- "$TMP_ROOT"
+}
+trap cleanup_selector EXIT
 
 hash_file() {
   git hash-object --stdin < "$1" 2>/dev/null
@@ -224,6 +258,27 @@ if ! fetch_target; then
   TARGET_BASE_TIP=unavailable
   REASON='target-fetch-unavailable'
 fi
+
+verify_gate_selector_identity() {
+  local target_selector="$TMP_ROOT/target-selector" running_hash target_hash
+  [ "$CONTEXT" = gate-shadow ] || return 0
+  "$TARGET_FETCHED" \
+    || coverage_error trusted-selector-unavailable "gate-shadow cannot verify target-main selector identity"
+  [ -f "$SELECTOR_SOURCE" ] && [ ! -L "$SELECTOR_SOURCE" ] \
+    || coverage_error trusted-selector-unavailable "the running gate selector is not a regular file"
+  git -C "$TARGET_GIT" show \
+    "$TARGET_BASE_TIP:bin/fm-test-select.sh" > "$target_selector" 2>/dev/null \
+    || coverage_error trusted-selector-unavailable "target main does not contain the trusted selector"
+  running_hash=$(git hash-object --stdin < "$SELECTOR_SOURCE" 2>/dev/null) \
+    || coverage_error trusted-selector-unavailable "cannot hash the running gate selector"
+  target_hash=$(git hash-object --stdin < "$target_selector" 2>/dev/null) \
+    || coverage_error trusted-selector-unavailable "cannot hash the target-main selector"
+  if [ "$running_hash" != "$target_hash" ]; then
+    coverage_error trusted-selector-mismatch "the running gate selector does not match target main"
+  fi
+}
+
+verify_gate_selector_identity
 
 # Inventory is the lexical filesystem set, not a caller-provided list.  Every
 # member must be a safe regular non-symlink before complete execution is safe.
@@ -403,6 +458,7 @@ CHANGE_OLD_MODES=()
 CHANGE_NEW_MODES=()
 PARSE_UNSAFE=false
 PARSE_STRUCTURAL=false
+DIFF_PARSED=false
 
 parse_raw_file() {
   local raw_file=$1 meta first newmode status oldmode path oldpath
@@ -484,7 +540,7 @@ classify_diff() {
     REASON=diff-unavailable
     return 1
   fi
-  if ! parse_diff; then
+  if ! "$DIFF_PARSED"; then
     REASON=diff-parse-uncertain
     return 1
   fi
@@ -583,6 +639,74 @@ classify_diff() {
   return 0
 }
 
+if "$DIFF_AVAILABLE" && parse_diff; then
+  DIFF_PARSED=true
+else
+  DIFF_COUNT=unavailable
+fi
+
+verify_final_stability() {
+  local final_snapshot="$TMP_ROOT/final-snapshot" target_recheck="$TMP_ROOT/target-recheck"
+  local latest_target='' latest_ref='' extra='' line_count=0
+  local row_target row_ref row_extra
+  if ! snapshot_signature "$final_snapshot" \
+    || ! cmp -s "$INITIAL_SNAPSHOT" "$final_snapshot"; then
+    SNAPSHOT_STABILITY=changed
+    RESULT=error
+    REASON=concurrent-snapshot-change
+    emit_receipt
+    exit 75
+  fi
+  if "$TARGET_FETCHED"; then
+    if ! git ls-remote --heads "$ORIGIN_URL" refs/heads/main \
+      > "$target_recheck" 2>/dev/null; then
+      SNAPSHOT_STABILITY=unavailable
+      RESULT=error
+      REASON='target-recheck-unavailable'
+      emit_receipt
+      exit 70
+    fi
+    while IFS=$'\t' read -r row_target row_ref row_extra; do
+      line_count=$((line_count + 1))
+      latest_target=$row_target
+      latest_ref=$row_ref
+      extra=$row_extra
+    done < "$target_recheck"
+    if [ "$line_count" -eq 0 ]; then
+      SNAPSHOT_STABILITY=changed
+      RESULT=error
+      REASON=concurrent-snapshot-change
+      emit_receipt
+      exit 75
+    fi
+    if [ "$latest_ref" != refs/heads/main ] || [ -n "$extra" ] \
+      || [ "$line_count" -ne 1 ]; then
+      SNAPSHOT_STABILITY=unavailable
+      RESULT=error
+      REASON='target-recheck-unavailable'
+      emit_receipt
+      exit 70
+    fi
+    case "$latest_target" in
+      *[!0-9a-f]*|'')
+        SNAPSHOT_STABILITY=unavailable
+        RESULT=error
+        REASON='target-recheck-unavailable'
+        emit_receipt
+        exit 70
+        ;;
+    esac
+    if [ "$latest_target" != "$TARGET_BASE_TIP" ]; then
+      SNAPSHOT_STABILITY=changed
+      RESULT=error
+      REASON=concurrent-snapshot-change
+      emit_receipt
+      exit 75
+    fi
+  fi
+  SNAPSHOT_STABILITY=stable
+}
+
 if [ "$CONTEXT" = full ]; then
   CLASSIFICATION=complete
   REASON=explicit-full
@@ -600,25 +724,10 @@ fi
 
 if [ "$CONTEXT" = local ] && [ "$CLASSIFICATION" = no-change ]; then
   ORDERED_TESTS=none
+  verify_final_stability
   RESULT=no-change
-  FINAL_SNAPSHOT="$TMP_ROOT/final-snapshot"
-  snapshot_signature "$FINAL_SNAPSHOT" || {
-    SNAPSHOT_STABILITY=changed
-    RESULT=error
-    REASON=concurrent-snapshot-change
-    emit_receipt
-    exit 75
-  }
-  if cmp -s "$INITIAL_SNAPSHOT" "$FINAL_SNAPSHOT"; then
-    SNAPSHOT_STABILITY=stable
-    emit_receipt
-    exit 0
-  fi
-  SNAPSHOT_STABILITY=changed
-  RESULT=error
-  REASON=concurrent-snapshot-change
   emit_receipt
-  exit 75
+  exit 0
 fi
 
 FOCUS_CODES=
@@ -631,6 +740,7 @@ run_focus() {
   local test rc
   FOCUS_CODES=
   FOCUS_FAILED=0
+  FOCUS_EXECUTION=running
   if ! command -v bash >/dev/null 2>&1; then
     FOCUS_EXECUTION=blocked
     FOCUS_RESULTS=unavailable
@@ -665,6 +775,7 @@ run_full() {
   FULL_FAILED=0
   FULL_PASSED=0
   FULL_FOCUS_CODES=
+  FULL_EXECUTION=running
   if ! command -v bash >/dev/null 2>&1 || ! command -v tmux >/dev/null 2>&1; then
     FULL_EXECUTION=blocked
     FULL_RESULTS=unavailable
@@ -741,27 +852,7 @@ if [ "$CONTEXT" = gate-shadow ] && [ "$FOCUS_EXECUTION" != skipped ]; then
   fi
 fi
 
-# Recheck the remote target independently from the temporary fetched ref.
-TARGET_CHANGED=false
-if "$TARGET_FETCHED"; then
-  latest_target=$(git ls-remote --heads "$ORIGIN_URL" refs/heads/main 2>/dev/null \
-    | awk 'NR == 1 { print $1 }') || latest_target=
-  if [ -z "$latest_target" ] || [ "$latest_target" != "$TARGET_BASE_TIP" ]; then
-    TARGET_CHANGED=true
-  fi
-fi
-
-FINAL_SNAPSHOT="$TMP_ROOT/final-snapshot"
-if ! snapshot_signature "$FINAL_SNAPSHOT" \
-  || ! cmp -s "$INITIAL_SNAPSHOT" "$FINAL_SNAPSHOT" \
-  || "$TARGET_CHANGED"; then
-  SNAPSHOT_STABILITY=changed
-  RESULT=error
-  REASON=concurrent-snapshot-change
-  emit_receipt
-  exit 75
-fi
-SNAPSHOT_STABILITY=stable
+verify_final_stability
 
 case "$TEST_EXIT" in
   0)
