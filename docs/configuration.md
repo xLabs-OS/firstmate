@@ -103,9 +103,11 @@ See [`wedge-alarm.md`](wedge-alarm.md) for the channel reference and macOS verif
 
 ## Gate defaults (.no-mistakes.yaml)
 
-The tracked `.no-mistakes.yaml` keeps test evidence outside the repo and defines `commands.test` so no-mistakes runs firstmate's bash behavior suite directly.
+The tracked `.no-mistakes.yaml` keeps test evidence outside the repo and defines `commands.test` to load the selector committed on target `main` from a restricted temporary clone.
+The gate fails closed when that target fetch or the selector's target-main identity check cannot establish trusted policy.
+The trusted selector runs `gate-shadow`, which may shadow an exact focused plan but always runs the complete bash behavior suite once before delivery.
 That evidence policy is specific to the firstmate repo: target projects may legitimately commit `.no-mistakes/evidence/` from their own no-mistakes pipeline, but firstmate keeps `.no-mistakes/` local and CI rejects tracked entries under that path.
-That command requires `tmux` on `PATH`, prints `tmux -V`, runs every `tests/*.test.sh` with `bash`, and fails if any script exits non-zero.
+The complete suite requires `tmux` on `PATH`, prints `tmux -V`, runs every `tests/*.test.sh` with `bash`, and fails if any script exits non-zero.
 It intentionally mirrors the behavior-test baseline in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) instead of delegating the test step to an agent.
 
 ## Captain preferences (data/captain.md)
