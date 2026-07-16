@@ -444,8 +444,12 @@ test_gate_owner() {
   assert_grep "lint: 'bin/fm-lint.sh'" "$config" "gate owner lost lint owner"
   assert_grep "store_in_repo: false" "$config" "gate owner enabled repository evidence"
   assert_grep "https://github.com/xLabs-OS/firstmate" "$config" "gate owner does not fetch authoritative target main"
+  assert_grep 'ls-tree -r --name-only HEAD -- bin/fm-test-select.sh' "$config" \
+    "gate owner does not distinguish a missing selector from target read failure"
   assert_grep "show HEAD:bin/fm-test-select.sh" "$config" "gate owner does not read trusted selector content"
   assert_grep 'bash "$tmp_dir/selector" gate-shadow' "$config" "gate owner does not invoke gate-shadow"
+  assert_grep 'target main has no selector; running complete bootstrap suite' "$config" \
+    "gate owner lacks the selector-bootstrap complete-suite fallback"
   assert_no_grep "allow_repo_commands" "$config" "gate owner enabled branch repository commands"
   pass "gate-owner"
 }
@@ -560,12 +564,87 @@ test_shallow_no_base() {
 }
 
 test_trusted_selector_missing() {
-  local config="$ROOT/.no-mistakes.yaml"
-  assert_grep 'git -C "$tmp_dir/target" show HEAD:bin/fm-test-select.sh > "$tmp_dir/selector"' "$config" \
-    "trusted loader does not fail when target main lacks the selector"
+  local config="$ROOT/.no-mistakes.yaml" loader fakebin fixture marker rc=0
+  setup_fixture
+  loader=$(sed -n "s/^  test: '\(.*\)'$/\1/p" "$config")
+  [ -n "$loader" ] || fail "could not extract trusted loader command"
+  fakebin="$TMP/selector-missing-fakebin"
+  fixture="$TMP/selector missing bootstrap fixture"
+  marker="$TMP/selector-missing.marker"
+  mkdir -p "$fakebin" "$fixture/tests"
+  write_pass_test "$fixture/tests/bootstrap.test.sh" bootstrap
+  cat > "$fakebin/git" <<'SH'
+#!/bin/bash
+set -eu
+case "${1:-}" in
+  clone)
+    last=
+    for arg in "$@"; do
+      last=$arg
+    done
+    mkdir -p "$last"
+    ;;
+  -C)
+    [ "${3:-}" = ls-tree ] || exit 2
+    exit 0
+    ;;
+  *) exit 2 ;;
+esac
+SH
+  cat > "$fakebin/tmux" <<'SH'
+#!/bin/bash
+set -eu
+[ "${1:-}" = -V ] || exit 2
+printf 'tmux fixture\n'
+SH
+  chmod +x "$fakebin/git" "$fakebin/tmux"
+  (cd "$fixture" && FM_SELECTOR_TEST_LOG="$marker" PATH="$fakebin:$PATH" /bin/sh -c "$loader") || rc=$?
+  expect_code 0 "$rc" trusted-selector-missing
+  assert_present "$marker" "bootstrap fallback did not run the complete suite"
+  assert_grep 'bootstrap' "$marker" "bootstrap fallback did not run its test"
+  assert_grep 'for t in tests/*.test.sh' "$config" \
+    "bootstrap fallback does not own the complete test inventory"
   assert_no_grep 'git show HEAD:bin/fm-test-select.sh' "$config" \
     "trusted loader can fall back to branch selector content"
   pass "trusted-selector-missing"
+}
+
+test_trusted_selector_read_failure() {
+  local config="$ROOT/.no-mistakes.yaml" loader fakebin fixture marker rc=0
+  setup_fixture
+  loader=$(sed -n "s/^  test: '\(.*\)'$/\1/p" "$config")
+  [ -n "$loader" ] || fail "could not extract trusted loader command"
+  fakebin="$TMP/selector-read-failure-fakebin"
+  fixture="$TMP/selector read failure fixture"
+  marker="$TMP/selector-read-failure.marker"
+  mkdir -p "$fakebin" "$fixture/tests"
+  write_pass_test "$fixture/tests/should-not-run.test.sh" should-not-run
+  cat > "$fakebin/git" <<'SH'
+#!/bin/bash
+set -eu
+case "${1:-}" in
+  clone)
+    last=
+    for arg in "$@"; do
+      last=$arg
+    done
+    mkdir -p "$last"
+    ;;
+  -C)
+    case "${3:-}" in
+      ls-tree) printf 'bin/fm-test-select.sh\n' ;;
+      show) exit 1 ;;
+      *) exit 2 ;;
+    esac
+    ;;
+  *) exit 2 ;;
+esac
+SH
+  chmod +x "$fakebin/git"
+  (cd "$fixture" && FM_SELECTOR_TEST_LOG="$marker" PATH="$fakebin:$PATH" /bin/sh -c "$loader") || rc=$?
+  expect_code 70 "$rc" trusted-selector-read-failure
+  assert_absent "$marker" "selector read failure ran the bootstrap suite"
+  pass "trusted-selector-read-failure"
 }
 
 test_shadow_full_fails() {
@@ -731,8 +810,11 @@ case "${1:-}" in
     mkdir -p "$last"
     ;;
   -C)
-    [ "${3:-}" = show ] || exit 2
-    printf '#!/usr/bin/env bash\nexit 0\n'
+    case "${3:-}" in
+      ls-tree) printf 'bin/fm-test-select.sh\n' ;;
+      show) printf '#!/usr/bin/env bash\nexit 0\n' ;;
+      *) exit 2 ;;
+    esac
     ;;
   *) exit 2 ;;
 esac
@@ -779,6 +861,7 @@ CASES=(
   fetch-failure
   shallow-no-base
   trusted-selector-missing
+  trusted-selector-read-failure
   shadow-full-fails
   shadow-focus-fails
   concurrent-change
@@ -819,6 +902,7 @@ run_case() {
     fetch-failure) test_fetch_failure ;;
     shallow-no-base) test_shallow_no_base ;;
     trusted-selector-missing) test_trusted_selector_missing ;;
+    trusted-selector-read-failure) test_trusted_selector_read_failure ;;
     shadow-full-fails) test_shadow_full_fails ;;
     shadow-focus-fails) test_shadow_focus_fails ;;
     concurrent-change) test_concurrent_change ;;

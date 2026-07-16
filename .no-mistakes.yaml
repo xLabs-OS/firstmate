@@ -20,11 +20,13 @@ disable_project_settings: true
 # definition that .github/workflows/ci.yml also invokes, so local can never
 # diverge from CI again (parity asserted by tests/fm-lint.test.sh).
 # The target-main selector may shadow an exact focused mapping, but gate-shadow
-# always runs the complete suite once and propagates every failure. The e2e tests
-# need tmux on PATH, which the firstmate environment provides.
+# always runs the complete suite once and propagates every failure.
+# A selector-introducing change has no target-main selector to load yet, so its
+# bootstrap path runs this fixed complete-suite command once instead.
+# The e2e tests need tmux on PATH, which the firstmate environment provides.
 commands:
   lint: 'bin/fm-lint.sh'
-  test: 'umask 077; tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-select-gate.XXXXXX") || exit 70; cleanup() { rm -rf -- "$tmp_dir"; }; signal_exit() { exit 70; }; trap cleanup EXIT; trap signal_exit HUP INT TERM; git clone --quiet --filter=blob:none --no-checkout --depth=1 --branch main https://github.com/xLabs-OS/firstmate "$tmp_dir/target" || exit 70; git -C "$tmp_dir/target" show HEAD:bin/fm-test-select.sh > "$tmp_dir/selector" || exit 70; chmod 500 "$tmp_dir/selector" || exit 70; bash "$tmp_dir/selector" gate-shadow'
+  test: 'umask 077; tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-select-gate.XXXXXX") || exit 70; cleanup() { rm -rf -- "$tmp_dir"; }; signal_exit() { exit 70; }; trap cleanup EXIT; trap signal_exit HUP INT TERM; git clone --quiet --filter=blob:none --no-checkout --depth=1 --branch main https://github.com/xLabs-OS/firstmate "$tmp_dir/target" || exit 70; target_selector=$(git -C "$tmp_dir/target" ls-tree -r --name-only HEAD -- bin/fm-test-select.sh) || exit 70; if [ "$target_selector" = bin/fm-test-select.sh ]; then git -C "$tmp_dir/target" show HEAD:bin/fm-test-select.sh > "$tmp_dir/selector" || exit 70; chmod 500 "$tmp_dir/selector" || exit 70; bash "$tmp_dir/selector" gate-shadow; elif [ -z "$target_selector" ]; then printf "%s\\n" "fm-test-select: target main has no selector; running complete bootstrap suite" >&2; command -v tmux >/dev/null || { echo "tmux is required for e2e tests" >&2; exit 1; }; tmux -V; rc=0; for t in tests/*.test.sh; do echo "== $t =="; bash "$t" || rc=1; done; exit "$rc"; else exit 70; fi'
 
 # Keep test evidence out of this repo; it stays in a temp dir instead.
 test:
