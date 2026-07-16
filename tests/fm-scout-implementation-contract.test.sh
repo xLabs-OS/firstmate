@@ -118,8 +118,16 @@ test_tests_delivery_stops_and_safety() {
   done
   assert_grep "A precise scout does not make a weak model safe for high-risk work." "$SKILL" \
     "weak-model safety statement is missing"
-  assert_grep "Existing generic scouts remain backward compatible" "$SKILL" \
-    "generic-scout compatibility boundary is missing"
+  assert_grep "The inputs and outputs are Markdown instruction contracts, and enforcement in this version is a static shell test rather than a runtime parser or new CLI schema." "$SKILL" \
+    "instruction-only, no-runtime-enforcement boundary is missing"
+  assert_grep "The captain's existing merge authority remains unchanged." "$SKILL" \
+    "captain-only merge authority is missing"
+  assert_grep "preserve the captain's authority unless an existing approved posture says otherwise." "$SKILL" \
+    "delivery choreography can no longer preserve captain merge authority"
+  assert_grep "Existing generic scouts remain backward compatible, retain their current lifecycle, and remain eligible for scratch-scout teardown." "$SKILL" \
+    "generic-scout lifecycle and scratch-teardown boundary is missing"
+  assert_grep "this contract changes report quality, not scout worktree ownership." "$SKILL" \
+    "contract must not alter scratch-scout worktree ownership"
   pass "test classes, delivery choreography, hard stops, and safety are protected"
 }
 
