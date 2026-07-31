@@ -326,7 +326,12 @@ launch_template() {
       if [ "$kind" = secondmate ]; then
         printf '%s' 'codex __MODELFLAG____EFFORTFLAG__--dangerously-bypass-approvals-and-sandbox "$(cat __BRIEF__)"'
       else
-        printf '%s' 'codex __MODELFLAG____EFFORTFLAG__--dangerously-bypass-approvals-and-sandbox -c "notify=[\"bash\",\"-c\",\"touch __TURNEND__\"]" "$(cat __BRIEF__)"'
+        # --dangerously-bypass-hook-trust lets the worktree .codex/hooks.json
+        # written below (the vault guard) load without a trust dialog; without
+        # it the hook file would be inert or wedge the pane on a trust prompt.
+        # Risk-equivalent to the existing approvals/sandbox bypass this
+        # unattended crewmate already runs with (docs/vault-guard.md).
+        printf '%s' 'codex __MODELFLAG____EFFORTFLAG__--dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust -c "notify=[\"bash\",\"-c\",\"touch __TURNEND__\"]" "$(cat __BRIEF__)"'
       fi
       ;;
     opencode) printf '%s' 'OPENCODE_CONFIG_CONTENT='\''{"permission":{"*":"allow"}}'\'' opencode __MODELFLAG__--prompt "$(cat __BRIEF__)"' ;;
@@ -882,12 +887,16 @@ exclude_path() {
   mkdir -p "$(dirname "$EXCL")"
   grep -qxF "$rel" "$EXCL" 2>/dev/null || echo "$rel" >> "$EXCL"
 }
+# The vault guard (docs/vault-guard.md) is installed alongside each harness's
+# turn-end hook: an absolute path to this firstmate's checker, because a task
+# worktree is a project repo that does not contain firstmate's bin/.
+VAULT_CHECK="$FM_ROOT/bin/fm-vault-pretool-check.sh"
 if [ "$KIND" != secondmate ]; then
   case "$HARNESS" in
     claude*)
       mkdir -p "$WT/.claude"
       cat > "$WT/.claude/settings.local.json" <<EOF
-{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"touch '$TURNEND'"}]}]}}
+{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"'$VAULT_CHECK' --claude"}]}],"Stop":[{"hooks":[{"type":"command","command":"touch '$TURNEND'"}]}]}}
 EOF
       exclude_path '.claude/settings.local.json'
       ;;
@@ -901,24 +910,79 @@ export const FmTurnEnd = async ({ \$ }) => ({
 })
 EOF
       exclude_path '.opencode/plugins/fm-turn-end.js'
+      cat > "$WT/.opencode/plugins/fm-vault-guard.js" <<EOF
+// Firstmate vault-guard PreToolUse seatbelt; written by fm-spawn
+// (docs/vault-guard.md). Blocks by throwing, like the primary pretool plugins.
+import { spawn } from "node:child_process";
+
+export const FmVaultGuard = async () => ({
+  "tool.execute.before": async (input, output) => {
+    if (input?.tool !== "bash") return;
+    const command = output?.args?.command;
+    if (!command || typeof command !== "string") return;
+    const result = await new Promise((resolvePromise) => {
+      const child = spawn("$VAULT_CHECK", ["--command", command], { stdio: ["ignore", "ignore", "pipe"] });
+      let stderr = "";
+      child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
+      child.on("error", () => resolvePromise({ code: 0, stderr: "" }));
+      child.on("close", (code) => resolvePromise({ code: code ?? 0, stderr }));
+    });
+    if (result.code !== 2) return;
+    throw new Error(result.stderr.trim() || "denied by the vault-guard PreToolUse seatbelt");
+  },
+});
+EOF
+      exclude_path '.opencode/plugins/fm-vault-guard.js'
       ;;
     pi*)
       # Written OUTSIDE the worktree: pi's project-trust gate fires on any extension
       # loaded from inside the project (verified live), but an explicit -e path
       # elsewhere loads without a dialog. Lives in state/, cleaned by teardown.
       cat > "$STATE/$ID.pi-ext.ts" <<EOF
-// Firstmate turn-end signal; written by fm-spawn.
+// Firstmate turn-end signal and vault-guard seatbelt; written by fm-spawn.
 // Use "turn_end" (fires after each turn the agent finishes), not "agent_end"
 // (fires once, only when the whole run exits): the watcher needs a signal at
 // every turn boundary so an idle crewmate is surfaced, not just at shutdown.
-import { execFile } from "node:child_process";
+// The tool_call handler is the vault guard (docs/vault-guard.md); it rides
+// this same file so no extra -e flag is needed at launch.
+import { execFile, spawn } from "node:child_process";
 export default function (pi: any) {
   pi.on("turn_end", () => execFile("touch", ["$TURNEND"]));
+  pi.on("tool_call", async (event: any) => {
+    if (event.type !== "tool_call" || event.toolName !== "bash") return {};
+    const command = String((event.input as { command?: unknown })?.command ?? "");
+    if (!command) return {};
+    const result = await new Promise<{ code: number; stderr: string }>((resolveResult) => {
+      const child = spawn("$VAULT_CHECK", ["--command", command], { stdio: ["ignore", "ignore", "pipe"] });
+      let stderr = "";
+      child.stderr.on("data", (chunk: any) => { stderr += chunk.toString(); });
+      child.on("error", () => resolveResult({ code: 0, stderr: "" }));
+      child.on("close", (code: number | null) => resolveResult({ code: code ?? 0, stderr }));
+    });
+    if (result.code !== 2) return {};
+    return { block: true, reason: result.stderr.trim() || "denied by the vault-guard PreToolUse seatbelt" };
+  });
 }
 EOF
       ;;
     codex*)
-      # codex: turn-end rides the launch command via -c notify=[...] and __TURNEND__.
+      # codex: turn-end rides the launch command via -c notify=[...] and
+      # __TURNEND__. The vault guard needs a worktree .codex/hooks.json (codex
+      # loads hooks from the cwd), which the launch template's
+      # --dangerously-bypass-hook-trust lets load without a trust dialog. A
+      # project that tracks its own .codex/hooks.json is left untouched -
+      # overwriting a tracked file would dirty the worktree - and the uncovered
+      # task is warned loudly (docs/vault-guard.md owns this gap).
+      if [ -e "$WT/.codex/hooks.json" ]; then
+        echo "warning: $WT/.codex/hooks.json already exists (project-tracked?); vault guard NOT installed for this codex task - see docs/vault-guard.md" >&2
+      else
+        mkdir -p "$WT/.codex"
+        # shellcheck disable=SC2016  # single quotes are deliberate: $payload/$c expand when codex runs the hook, not here
+        vault_hook_body='payload=$(cat 2>/dev/null || true); [ -n "$payload" ] || exit 0; c='"$(shell_quote "$VAULT_CHECK")"'; [ -x "$c" ] || exit 0; printf "%s" "$payload" | "$c"'
+        printf '{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"%s","timeout":10}]}]}}\n' \
+          "$(json_escape "bash -lc $(shell_quote "$vault_hook_body")")" > "$WT/.codex/hooks.json"
+        exclude_path '.codex/hooks.json'
+      fi
       ;;
     grok*)
       # grok fires a Stop hook at every turn boundary (verified, grok 0.2.73), the
@@ -968,6 +1032,28 @@ EOF
       printf '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"%s"}]}]}}\n' "$hook_command" > "$GROK_HOOKS_DIR/fm-turn-end.json"
       printf 'token=%s\n' "${auth_file##*/}" > "$WT/.fm-grok-turnend"
       exclude_path '.fm-grok-turnend'
+      # Vault guard (docs/vault-guard.md): grok crewmate worktrees never hold
+      # hook trust, so like the turn-end hook this rides a firstmate-owned
+      # GLOBAL hook. It is a guarded no-op for every non-firstmate grok
+      # session: it fires only when the current workspace holds the
+      # .fm-grok-turnend crewmate pointer written above. Unlike the turn-end
+      # hook it needs no token registry - it writes nothing pointer-derived,
+      # only classifies the stdin payload through the baked firstmate checker.
+      sq_vault_check=$(shell_quote "$VAULT_CHECK")
+      cat > "$GROK_HOOKS_DIR/fm-vault-guard.sh" <<EOF
+#!/usr/bin/env bash
+# Firstmate vault-guard PreToolUse hook; written by fm-spawn (docs/vault-guard.md).
+set -u
+workspace=\${GROK_WORKSPACE_ROOT:-}
+[ -n "\$workspace" ] || exit 0
+[ -f "\$workspace/.fm-grok-turnend" ] || exit 0
+checker=$sq_vault_check
+[ -x "\$checker" ] || exit 0
+exec "\$checker"
+EOF
+      chmod +x "$GROK_HOOKS_DIR/fm-vault-guard.sh"
+      vault_hook_command=$(json_escape "bash $(shell_quote "$GROK_HOOKS_DIR/fm-vault-guard.sh")")
+      printf '{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"%s","timeout":10}]}]}}\n' "$vault_hook_command" > "$GROK_HOOKS_DIR/fm-vault-guard.json"
       ;;
   esac
 fi
