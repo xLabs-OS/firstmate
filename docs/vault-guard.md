@@ -23,9 +23,9 @@ The policy is fail-closed: only provably value-safe forms are allowed, and shell
 | `command -v infisical` / `command -V infisical` (existence query, the cd-guard's carve-out) | allow | |
 | `bin/fm-secrets-names.sh ...` (names-only wrapper) | allow (by construction: it never matches the infisical token) | |
 | Any other subcommand (`secrets`, `export`, `get`, ...), bare `infisical`, or a flags-only invocation | deny | `vault-secret-print` |
-| A `run` child that dumps the injected env: `env`/`printenv`/`set`/`export`/`declare`/`typeset` (through `env`/`sudo`/`timeout`-style wrappers and `xargs`-style forwarders too), an `echo`/`printf` carrying a `$`, or a shell/`eval` payload reaching one of those | deny | `vault-run-dump` |
+| A `run` child that dumps the injected env: `env`/`printenv`/`set`/`export`/`declare`/`typeset` (through resolved option-bearing wrappers and forwarders such as `nice -n 1`, `stdbuf -oL`, `watch -n 5`, and `xargs -I {}` too), an `echo`/`printf` carrying a `$`, or a shell/`eval` payload reaching one of those | deny | `vault-run-dump` |
 | Executed infisical inside substitutions, subshells, literal `sh -c`/`eval` payloads, or heredocs fed to a stdin-mode shell | classified recursively, same rules as above | |
-| Unclassifiable with the token present: lexer errors, unsupported compound grammar (`if`/`for`/`while`/`case`/`time`/...), dynamic (non-literal) payloads or command words, unresolved wrapper options, or an indirect executor (`xargs`, `watch`, `nice`, ...) whose arguments carry the token | deny | `unclassifiable-vault-command` |
+| Unclassifiable with the token present: lexer errors, unsupported compound grammar (`if`/`for`/`while`/`case`/`time`/...), dynamic (non-literal) payloads or command words, unresolved wrapper or forwarder options, or an indirect executor (`xargs`, `watch`, `nice`, ...) whose arguments carry the token | deny | `unclassifiable-vault-command` |
 
 Token matching is case-insensitive end to end (prefilter and policy), because macOS's default case-insensitive filesystem executes `Infisical secrets` as the real binary.
 The run-child dump check also resolves cobra's glued short form (`-cprintenv`, `-c=x`) and skips `builtin` prefixes, so `sh -c 'builtin export'` under `run` still denies.
@@ -46,7 +46,7 @@ Unlike the cd-guard there is no environment scoping: the guard fires wherever it
 ## The names-only wrapper
 
 `bin/fm-secrets-names.sh --projectId <id> --env <slug> [--path <folder>]` is the only sanctioned listing tool.
-It invokes `infisical export --format json --silent`, captures stdout, and structurally strips to name fields: an array of `{key: ...}` objects yields each `.key`, a flat object yields its keys, and ANY other shape aborts with nothing printed and a non-zero exit.
+It invokes `infisical export --format json --silent`, captures stdout, and structurally strips to name fields: an array of `{key: ...}` objects yields each `.key`, a flat object with only string values yields its keys, and ANY other shape aborts with nothing printed and a non-zero exit.
 There is no raw-output fallback path; a parse failure prints nothing.
 Secret values transit the wrapper's internal pipe (the CLI has no names-only fetch) but never its output.
 

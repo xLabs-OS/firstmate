@@ -68,6 +68,10 @@ matrix_case R12 vault-run-dump "infisical run --command 'sh -c \"printenv\"'"
 matrix_case R13 vault-run-dump 'infisical run -cprintenv'
 matrix_case R14 vault-run-dump 'infisical run -- builtin export'
 matrix_case R15 vault-run-dump 'infisical run -- sh -c "builtin export"'
+matrix_case R16 vault-run-dump 'infisical run -- nice -n 1 printenv'
+matrix_case R17 vault-run-dump 'infisical run -- nice -n 1 env FOO=1 printenv'
+matrix_case R18 vault-run-dump 'infisical run -- stdbuf -oL printenv'
+matrix_case R19 vault-run-dump 'infisical run -- xargs -I {} printenv'
 
 # DENY unclassifiable-vault-command: fail closed around the token.
 matrix_case U01 unclassifiable-vault-command 'xargs infisical secrets'
@@ -80,6 +84,7 @@ matrix_case U07 unclassifiable-vault-command 'infisical $SUB'
 matrix_case U08 unclassifiable-vault-command 'infisical run --command "$CMD"'
 matrix_case U09 unclassifiable-vault-command 'time infisical secrets'
 matrix_case U10 unclassifiable-vault-command 'infisical run -- SH -c "printenv"'
+matrix_case U11 unclassifiable-vault-command 'infisical run -- nice --unknown printenv'
 
 # DENY, case variance: macOS's default filesystem executes these for real.
 matrix_case C01 vault-secret-print 'Infisical secrets'
@@ -106,6 +111,7 @@ matrix_case A17 allow 'npm install infisical-sdk'
 matrix_case A18 allow 'infisical run --watch -- npm run dev'
 matrix_case A19 allow 'command -v infisical'
 matrix_case A20 allow 'Infisical run -- npm start'
+matrix_case A21 allow 'infisical run -- watch -n 5 npm test'
 
 MATRIX_TMP=$(mktemp -d "${TMPDIR:-/tmp}/fm-vault-policy-matrix.XXXXXX")
 FM_TEST_CLEANUP_DIRS+=("$MATRIX_TMP")
@@ -271,7 +277,14 @@ make_wrapper_fakebin() {
 case "${FAKE_SHAPE:-array}" in
   array) printf '[{"key":"DB_URL","value":"postgres://secret-value-1"},{"key":"API_KEY","value":"sk-secret-value-2"}]' ;;
   object) printf '{"DB_URL":"postgres://secret-value-1","API_KEY":"sk-secret-value-2"}' ;;
+  empty-array) printf '[]' ;;
+  empty-object) printf '{}' ;;
   mixed) printf '[{"key":"GOOD","value":"v"},{"noKey":true}]' ;;
+  nested) printf '{"secrets":[{"key":"DB_URL","value":"secret-value-1"}],"meta":{}}' ;;
+  array-value) printf '{"DB_URL":[]}' ;;
+  object-value) printf '{"DB_URL":{}}' ;;
+  number-value) printf '{"DB_URL":1}' ;;
+  null-value) printf '{"DB_URL":null}' ;;
   garbage) printf 'DB_URL=secret-value-1\nAPI_KEY=secret-value-2\n' ;;
   fail) echo "auth error" >&2; exit 1 ;;
 esac
@@ -302,9 +315,20 @@ API_KEY' ] || fail "wrapper object output must be names only, got: $out"
   pass "fm-secrets-names.sh: flat object shape yields names only"
 }
 
+test_wrapper_allows_empty_known_shapes() {
+  local fakebin out rc shape
+  for shape in empty-array empty-object; do
+    fakebin=$(make_wrapper_fakebin "$TMP_ROOT/wrapper-$shape")
+    out=$(FAKE_SHAPE=$shape PATH="$fakebin:$PATH" "$WRAPPER" --projectId p1 --env dev 2>/dev/null); rc=$?
+    expect_code 0 "$rc" "wrapper must accept the empty $shape export shape"
+    [ -z "$out" ] || fail "wrapper empty $shape output must be empty, got: $out"
+  done
+  pass "fm-secrets-names.sh: empty known shapes succeed without output"
+}
+
 test_wrapper_fails_closed_on_unknown_shape() {
   local fakebin out rc shape
-  for shape in mixed garbage; do
+  for shape in mixed nested array-value object-value number-value null-value garbage; do
     fakebin=$(make_wrapper_fakebin "$TMP_ROOT/wrapper-$shape")
     out=$(FAKE_SHAPE=$shape PATH="$fakebin:$PATH" "$WRAPPER" --projectId p1 --env dev 2>/dev/null); rc=$?
     [ "$rc" -ne 0 ] || fail "wrapper must exit non-zero on the $shape shape"
@@ -599,6 +623,7 @@ test_prefilter_delegates_quote_split_token
 test_policy_cli_direct
 test_wrapper_names_only_array_shape
 test_wrapper_names_only_object_shape
+test_wrapper_allows_empty_known_shapes
 test_wrapper_fails_closed_on_unknown_shape
 test_wrapper_fails_closed_on_cli_failure
 test_wrapper_requires_project_and_env

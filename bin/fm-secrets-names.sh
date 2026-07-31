@@ -94,15 +94,17 @@ fi
 # Accept exactly the two machine shapes infisical export --format json is known
 # to emit, and nothing else:
 #   - an array of objects that each carry a string .key (name field),
-#   - a flat object whose keys are the secret names.
+#   - a flat object whose values are all strings, whose keys are the secret names.
 # Any other shape aborts with no stdout at all. jq output is captured first and
 # printed only after a fully successful parse, so a mid-stream jq error can
 # never leave partial output behind.
-if ! NAMES=$(printf '%s' "$RAW" | jq -er '
+if ! NAMES=$(printf '%s' "$RAW" | jq -r '
   if type == "array" then
     if all(.[]; type == "object" and (.key | type == "string")) then .[].key
     else error("unrecognized element shape") end
-  elif type == "object" then keys_unsorted[]
+  elif type == "object" then
+    if all(.[]; type == "string") then keys_unsorted[]
+    else error("unrecognized object shape") end
   else error("unrecognized document shape") end
 ' 2>/dev/null); then
   echo "error: infisical export output did not match a known JSON shape; refusing to print anything" >&2

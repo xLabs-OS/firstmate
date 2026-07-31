@@ -82,6 +82,32 @@ const EXEC_FORWARDERS = new Set([
   "unbuffer",
   "hyperfine",
 ]);
+const FORWARDER_OPTIONS = {
+  nice: {
+    shortNoArgument: new Set(),
+    shortTakesArgument: new Set(["n"]),
+    longNoArgument: new Set(["help", "version"]),
+    longTakesArgument: new Set(["adjustment"]),
+  },
+  watch: {
+    shortNoArgument: new Set(["b", "c", "e", "g", "q", "t", "w"]),
+    shortTakesArgument: new Set(["n"]),
+    longNoArgument: new Set(["beep", "color", "chgexit", "errexit", "exec", "no-rerun", "no-title", "precise", "quiet", "title"]),
+    longTakesArgument: new Set(["interval"]),
+  },
+  stdbuf: {
+    shortNoArgument: new Set(),
+    shortTakesArgument: new Set(["i", "o", "e"]),
+    longNoArgument: new Set(["help", "version"]),
+    longTakesArgument: new Set(["input", "output", "error"]),
+  },
+  xargs: {
+    shortNoArgument: new Set(["0", "r", "t", "x"]),
+    shortTakesArgument: new Set(["E", "e", "I", "i", "J", "L", "l", "n", "P", "p", "s"]),
+    longNoArgument: new Set(["exit", "no-run-if-empty", "null", "verbose", "help", "version"]),
+    longTakesArgument: new Set(["eof", "replace", "delimiter", "max-lines", "max-args", "max-procs", "max-chars"]),
+  },
+};
 const UNSUPPORTED_KEYWORDS = new Set([
   "if",
   "then",
@@ -154,6 +180,46 @@ function combine(target, nested, source) {
   if ((nested.unsupported || nested.dynamic) && mentionsInfisical(source)) {
     target.unsupported = true;
   }
+}
+
+function forwarderChild(name, words, index) {
+  const options = FORWARDER_OPTIONS[name];
+  let next = index;
+  while (words[next]) {
+    const value = words[next].value;
+    if (value === "--") return { words: words.slice(next + 1) };
+    if (!value.startsWith("-") || value === "-") return { words: words.slice(next) };
+    if (!options) return { unresolved: true };
+    if (value.startsWith("--")) {
+      const equals = value.indexOf("=");
+      const option = value.slice(2, equals === -1 ? undefined : equals);
+      if (options.longNoArgument.has(option)) {
+        if (equals !== -1) return { unresolved: true };
+        next += 1;
+        continue;
+      }
+      if (!options.longTakesArgument.has(option)) return { unresolved: true };
+      if (equals !== -1) {
+        next += 1;
+        continue;
+      }
+      if (!words[next + 1]) return { unresolved: true };
+      next += 2;
+      continue;
+    }
+    let consumedArgument = false;
+    for (let offset = 1; offset < value.length; offset += 1) {
+      const option = value[offset];
+      if (options.shortNoArgument.has(option)) continue;
+      if (!options.shortTakesArgument.has(option)) return { unresolved: true };
+      if (offset + 1 === value.length && !words[next + 1]) return { unresolved: true };
+      next += offset + 1 === value.length ? 2 : 1;
+      consumedArgument = true;
+      break;
+    }
+    if (!consumedArgument) next += 1;
+  }
+  return { words: [] };
 }
 
 // --- infisical invocation classification ------------------------------------
@@ -308,13 +374,9 @@ function classifyChild(childWords, tokens, depth) {
     return result;
   }
   if (EXEC_FORWARDERS.has(name)) {
-    // Resolve the forwarder like a wrapper: the first non-flag word after it
-    // starts the real child.
-    for (let i = position.index + 1; i < position.words.length; i += 1) {
-      if (!position.words[i].value.startsWith("-")) {
-        return classifyChild(position.words.slice(i), tokens, depth + 1);
-      }
-    }
+    const forwarded = forwarderChild(name, position.words, commandIndex + 1);
+    if (forwarded.unresolved) return deny("unclassifiable-vault-command");
+    if (forwarded.words.length > 0) return classifyChild(forwarded.words, tokens, depth + 1);
     return result;
   }
   return result;

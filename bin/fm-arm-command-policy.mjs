@@ -219,7 +219,7 @@ export class Lexer {
         if (redirection.value === "<<" || redirection.value === "<<-") this.expectHeredoc = { token, stripTabs: redirection.value === "<<-" };
         continue;
       }
-      if (char === "(" || char === "{") {
+      if (char === "(" || (char === "{" && /\s/.test(this.source[this.index + 1] || ""))) {
         const close = char === "(" ? ")" : "}";
         const balanced = extractBalanced(this.source, this.index + 1, char, close);
         if (!balanced) {
