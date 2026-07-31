@@ -65,6 +65,9 @@ matrix_case R09 vault-run-dump 'infisical run --command "printenv"'
 matrix_case R10 vault-run-dump 'infisical run -- echo $HOME'
 matrix_case R11 vault-run-dump "infisical run -- echo '\$FOO'"
 matrix_case R12 vault-run-dump "infisical run --command 'sh -c \"printenv\"'"
+matrix_case R13 vault-run-dump 'infisical run -cprintenv'
+matrix_case R14 vault-run-dump 'infisical run -- builtin export'
+matrix_case R15 vault-run-dump 'infisical run -- sh -c "builtin export"'
 
 # DENY unclassifiable-vault-command: fail closed around the token.
 matrix_case U01 unclassifiable-vault-command 'xargs infisical secrets'
@@ -76,6 +79,11 @@ matrix_case U06 unclassifiable-vault-command 'nice infisical export'
 matrix_case U07 unclassifiable-vault-command 'infisical $SUB'
 matrix_case U08 unclassifiable-vault-command 'infisical run --command "$CMD"'
 matrix_case U09 unclassifiable-vault-command 'time infisical secrets'
+matrix_case U10 unclassifiable-vault-command 'infisical run -- SH -c "printenv"'
+
+# DENY, case variance: macOS's default filesystem executes these for real.
+matrix_case C01 vault-secret-print 'Infisical secrets'
+matrix_case C02 vault-secret-print 'INFISICAL export'
 
 # ALLOW: the injection form, setup forms, the wrapper, and data mentions.
 matrix_case A01 allow 'infisical run --env=dev -- npm run dev'
@@ -96,6 +104,8 @@ matrix_case A15 allow 'bash -c "infisical run -- npm start"'
 matrix_case A16 allow 'git status'
 matrix_case A17 allow 'npm install infisical-sdk'
 matrix_case A18 allow 'infisical run --watch -- npm run dev'
+matrix_case A19 allow 'command -v infisical'
+matrix_case A20 allow 'Infisical run -- npm start'
 
 MATRIX_TMP=$(mktemp -d "${TMPDIR:-/tmp}/fm-vault-policy-matrix.XXXXXX")
 FM_TEST_CLEANUP_DIRS+=("$MATRIX_TMP")

@@ -20,12 +20,15 @@ The policy is fail-closed: only provably value-safe forms are allowed, and shell
 | `infisical run [flags] -- <cmd>` / `--command '<cmd>'` (injection form) | allow | |
 | `infisical login`, `infisical init`, `infisical help` | allow | |
 | `--help`, `-h`, or `--version` before any `--` terminator | allow | |
+| `command -v infisical` / `command -V infisical` (existence query, the cd-guard's carve-out) | allow | |
 | `bin/fm-secrets-names.sh ...` (names-only wrapper) | allow (by construction: it never matches the infisical token) | |
 | Any other subcommand (`secrets`, `export`, `get`, ...), bare `infisical`, or a flags-only invocation | deny | `vault-secret-print` |
 | A `run` child that dumps the injected env: `env`/`printenv`/`set`/`export`/`declare`/`typeset` (through `env`/`sudo`/`timeout`-style wrappers and `xargs`-style forwarders too), an `echo`/`printf` carrying a `$`, or a shell/`eval` payload reaching one of those | deny | `vault-run-dump` |
 | Executed infisical inside substitutions, subshells, literal `sh -c`/`eval` payloads, or heredocs fed to a stdin-mode shell | classified recursively, same rules as above | |
 | Unclassifiable with the token present: lexer errors, unsupported compound grammar (`if`/`for`/`while`/`case`/`time`/...), dynamic (non-literal) payloads or command words, unresolved wrapper options, or an indirect executor (`xargs`, `watch`, `nice`, ...) whose arguments carry the token | deny | `unclassifiable-vault-command` |
 
+Token matching is case-insensitive end to end (prefilter and policy), because macOS's default case-insensitive filesystem executes `Infisical secrets` as the real binary.
+The run-child dump check also resolves cobra's glued short form (`-cprintenv`, `-c=x`) and skips `builtin` prefixes, so `sh -c 'builtin export'` under `run` still denies.
 Data mentions stay data: quoted arguments (`echo "infisical secrets"`), grep patterns, comments, and heredoc bodies fed to non-shell commands never make the outer command relevant.
 Any `--command` string payload of `run` is itself classified as a program running with the injected environment, where ALL unclassifiable syntax denies (no token-gating - the environment it runs in is already the protected material).
 The deny reasons name the two sanctioned paths so the denied agent can self-correct: `bin/fm-secrets-names.sh --projectId <id> --env <slug>` for names, `infisical run [flags] -- <cmd>` for injection.

@@ -113,11 +113,16 @@ PREFILTER=${PREFILTER//\"/}
 PREFILTER=${PREFILTER//\'/}
 PREFILTER=${PREFILTER//$'\n'/}
 PREFILTER=${PREFILTER//$'\r'/}
+# The bracket pattern is the case-insensitive form of *infisical*: macOS's
+# default filesystem resolves `Infisical` to the real binary, and the policy
+# owner matches the token case-insensitively, so the prefilter must too (a
+# lowercase-only test would fast-allow a capitalized invocation past the
+# policy). Pure-bash pattern, no fork, macOS bash 3.2 compatible.
 case "$CMD" in
   *"\$'"*|*'$"'*) ;;
   *)
     case "$PREFILTER" in
-      *infisical*) ;;
+      *[Ii][Nn][Ff][Ii][Ss][Ii][Cc][Aa][Ll]*) ;;
       *) exit 0 ;;
     esac
     ;;

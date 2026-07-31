@@ -105,17 +105,38 @@ function basename(value) {
   return value.split("/").filter(Boolean).at(-1) || value;
 }
 
+// macOS's default filesystem is case-insensitive, so `Infisical secrets`
+// executes the real binary; every token match here is therefore
+// case-insensitive (the transport prefilter mirrors this).
+function isInfisicalName(value) {
+  return basename(value).toLowerCase() === "infisical";
+}
+
 // Raw-byte token test used only to gate the fail-closed fallbacks; it mirrors
 // the transport prefilter's cheap byte strip so an escape- or quote-split
 // token (infi\sical, in"fisical") still counts as a mention. Positive
 // classification of executed positions works on cooked words and does not use
 // this.
 function mentionsInfisical(text) {
-  return /infisical/.test(String(text).replace(/[\\'"\r\n]/g, ""));
+  return /infisical/i.test(String(text).replace(/[\\'"\r\n]/g, ""));
 }
 
 function dynamicWord(word) {
   return Boolean(word) && (!word.literal || word.subs.length > 0);
+}
+
+// `command -v infisical` is an existence query, not an execution (the same
+// carve-out the cd-guard makes for `command -v cd`).
+function hasCommandQueryPrefix(position) {
+  let commandPrefix = false;
+  for (const word of position.words.slice(position.prefixAssignments, position.index)) {
+    if (word.value === "command") {
+      commandPrefix = true;
+      continue;
+    }
+    if (commandPrefix && /^-[^-]*[vV]/.test(word.value)) return true;
+  }
+  return false;
 }
 
 function deny(code) {
@@ -162,17 +183,22 @@ function classifyRun(position, tokens, args, subIndex, terminator, depth) {
   for (let i = subIndex + 1; i < pre.length; i += 1) {
     const word = pre[i];
     let payloadWord = null;
+    let inlinePrefix = 0;
     if (word.value === "--command" || word.value === "-c") {
       payloadWord = pre[i + 1] || null;
       i += 1;
     } else if (word.value.startsWith("--command=")) {
       payloadWord = word;
+      inlinePrefix = "--command=".length;
+    } else if (word.value.startsWith("-c") && word.value.length > 2 && !word.value.startsWith("--")) {
+      // Cobra accepts the glued short form: -c'printenv' cooks to -cprintenv,
+      // and -c=x means the same payload.
+      payloadWord = word;
+      inlinePrefix = word.value.startsWith("-c=") ? 3 : 2;
     }
     if (!payloadWord) continue;
     if (dynamicWord(payloadWord)) return deny("unclassifiable-vault-command");
-    const payload = payloadWord.value.startsWith("--command=")
-      ? payloadWord.value.slice("--command=".length)
-      : payloadWord.value;
+    const payload = payloadWord.value.slice(inlinePrefix);
     const nested = classifyDumpProgram(payload, depth + 1);
     if (nested.deny) return nested;
     combine(result, nested, payload);
@@ -214,24 +240,33 @@ function classifyChild(childWords, tokens, depth) {
     if (nested.deny) return nested;
     combine(result, nested, payload);
   }
-  const command = position.command;
+  let command = position.command;
+  let commandIndex = position.index;
   if (!command) {
     // commandPosition consumes `env` as a wrapper; with no command after it,
     // bare `env` (or `env FOO=1`) prints the whole injected environment.
     if (position.wrappers.includes("env")) return deny("vault-run-dump");
     return result;
   }
+  // `builtin` is not a commandPosition wrapper; skip it so `builtin export`
+  // inside a shell payload still hits the dump check.
+  while (command && basename(command.value) === "builtin") {
+    commandIndex += 1;
+    command = position.words[commandIndex];
+  }
+  if (!command) return result;
   if (dynamicWord(command)) return deny("unclassifiable-vault-command");
-  const name = basename(command.value);
+  const name = basename(command.value).toLowerCase();
   if (DUMP_COMMANDS.has(name)) return deny("vault-run-dump");
   if (ECHO_COMMANDS.has(name)) {
-    const echoed = position.words.slice(position.index + 1);
+    const echoed = position.words.slice(commandIndex + 1);
     if (echoed.some((word) => dynamicWord(word) || word.value.includes("$"))) {
       return deny("vault-run-dump");
     }
     return result;
   }
   if (name === "infisical") {
+    if (hasCommandQueryPrefix(position)) return result;
     const nested = classifyInfisical(position, tokens, depth + 1);
     if (nested.deny) return nested;
     combine(result, nested, position.words.map((word) => word.value).join(" "));
@@ -239,7 +274,11 @@ function classifyChild(childWords, tokens, depth) {
   }
   if (name === "sh" || name === "bash" || name === "zsh") {
     const shell = shellInvocation(position);
-    if (shell?.kind === "command") {
+    // A case-variant shell name (SH) or a builtin-prefixed one defeats the
+    // case-sensitive shared shellInvocation; in dump context that is
+    // unclassifiable, so fail closed.
+    if (!shell) return deny("unclassifiable-vault-command");
+    if (shell.kind === "command") {
       if (!shell.payload) return result;
       if (dynamicWord(shell.payload)) return deny("unclassifiable-vault-command");
       const nested = classifyDumpProgram(shell.payload.value, depth + 1);
@@ -247,7 +286,7 @@ function classifyChild(childWords, tokens, depth) {
       combine(result, nested, shell.payload.value);
       return result;
     }
-    if (shell?.kind === "script") {
+    if (shell.kind === "script") {
       // An opaque script file cannot be classified; fail closed only when its
       // name carries the token, otherwise it is the workload's own business.
       if (shell.payload && mentionsInfisical(shell.payload.value)) return deny("unclassifiable-vault-command");
@@ -351,19 +390,24 @@ function classifyProgram(source, depth) {
     }
     const command = position.command;
     if (!command) continue;
-    const name = basename(command.value);
+    const name = basename(command.value).toLowerCase();
     if (name === "sh" || name === "bash" || name === "zsh") {
       const shell = shellInvocation(position);
-      if (shell?.kind === "command" && shell.payload) {
+      if (!shell) {
+        // A case-variant shell name (SH) defeats the case-sensitive shared
+        // shellInvocation; treat as unsupported so a token-carrying command
+        // still fails closed.
+        result.unsupported = true;
+      } else if (shell.kind === "command" && shell.payload) {
         if (dynamicWord(shell.payload)) {
           result.dynamic = true;
         } else {
           combine(result, classifyProgram(shell.payload.value, depth + 1), shell.payload.value);
           if (result.deny) return result;
         }
-      } else if (shell?.kind === "script") {
+      } else if (shell.kind === "script") {
         if (shell.payload && mentionsInfisical(shell.payload.value)) result.unsupported = true;
-      } else if (shell?.kind === "stdin") {
+      } else if (shell.kind === "stdin") {
         for (const body of [...shellHeredocPayloads(tokens, position), ...shellHereStringPayloads(tokens, position)]) {
           combine(result, classifyProgram(body, depth + 1), body);
           if (result.deny) return result;
@@ -377,13 +421,15 @@ function classifyProgram(source, depth) {
         combine(result, classifyProgram(payload, depth + 1), payload);
         if (result.deny) return result;
       }
-    } else if (name === "infisical") {
-      const nested = classifyInfisical(position, tokens, depth);
-      if (nested.deny) {
-        result.deny = nested.deny;
-        return result;
+    } else if (isInfisicalName(command.value)) {
+      if (!hasCommandQueryPrefix(position)) {
+        const nested = classifyInfisical(position, tokens, depth);
+        if (nested.deny) {
+          result.deny = nested.deny;
+          return result;
+        }
+        if (nested.unsupported) result.unsupported = true;
       }
-      if (nested.unsupported) result.unsupported = true;
     } else if (EXEC_FORWARDERS.has(name)) {
       if (position.words.some((word) => mentionsInfisical(word.value))) {
         result.deny = "unclassifiable-vault-command";
