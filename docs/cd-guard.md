@@ -5,8 +5,8 @@ This document is the authoritative human-readable contract for the cd-guard PreT
 `bin/fm-cd-pretool-check.sh` is the stable harness transport, primary-checkout scope, and output renderer.
 The tracked harness adapters forward command text without classifying it.
 
-It is the third member of a family of primary-session guards that share the same cross-harness hook machinery:
-the watcher-arm PreToolUse seatbelt (`bin/fm-arm-pretool-check.sh`, `docs/arm-pretool-check.md`) and the turn-end supervision guard (`bin/fm-turnend-guard.sh`, `docs/turnend-guard.md`).
+It shares cross-harness hook machinery with the watcher-arm and vault PreToolUse seatbelts and the turn-end supervision guard:
+the watcher-arm seatbelt (`bin/fm-arm-pretool-check.sh`, `docs/arm-pretool-check.md`), the vault-guard seatbelt (`bin/fm-vault-pretool-check.sh`, `docs/vault-guard.md`), and the turn-end supervision guard (`bin/fm-turnend-guard.sh`, `docs/turnend-guard.md`).
 
 ## Purpose and boundary
 
@@ -118,7 +118,7 @@ The cd-guard never duplicates shell lexing; it adds only the cd-specific decisio
 | OpenCode | `.opencode/plugins/fm-primary-cd-check.js` `tool.execute.before` | Throws, which surfaces as the failed tool result. |
 | Pi | `.pi/extensions/fm-primary-turnend-guard.ts` `tool_call` handler | Returns `{block: true}`; piggybacks on the already-loaded primary extension so no extra `-e` flag is needed. |
 
-Each harness runs the cd-guard alongside the watcher-arm seatbelt; the two are independent checks, and either deny blocks the command.
+Each harness runs the cd-guard alongside the watcher-arm and vault-guard seatbelts; the three are independent checks, and any deny blocks the command.
 Every shell variable reference in the Grok hook command carries an inline default (`${GROK_WORKSPACE_ROOT:-}`) because Grok expands the raw hook command before `bash -lc` runs it, the same requirement documented in `docs/arm-pretool-check.md`.
 
 ## Automated validation

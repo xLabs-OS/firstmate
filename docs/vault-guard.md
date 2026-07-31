@@ -52,7 +52,7 @@ Secret values transit the wrapper's internal pipe (the CLI has no names-only fet
 
 ## Install matrix (who gets the guard, and how)
 
-Primary firstmate and every secondmate home run from this repo, so the tracked adapter configs cover them; crewmate/scout worktrees are project repos, so `bin/fm-spawn.sh` installs a per-task hook with the absolute checker path baked in, alongside each harness's turn-end hook.
+Primary firstmate and every secondmate home run from this repo, so the tracked adapter configs cover them; crewmate/scout worktrees are project repos, so `bin/fm-spawn.sh` installs a per-task hook with the absolute checker path baked in, alongside each harness's existing turn-end integration.
 
 | Harness | Primary + secondmate home (tracked) | Crewmate/scout worktree (spawn-written) |
 | --- | --- | --- |
