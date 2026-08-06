@@ -169,6 +169,10 @@
       "audience": "agent-runtime"
     },
     {
+      "path": ".agents/skills/scout-implementation-contract/SKILL.md",
+      "audience": "agent-runtime"
+    },
+    {
       "path": ".agents/skills/secondmate-provisioning/SKILL.md",
       "audience": "agent-runtime"
     },
@@ -319,6 +323,10 @@
     {
       "path": "docs/turnend-guard.md",
       "audience": "operator-current"
+    },
+    {
+      "path": "docs/vault-guard.md",
+      "audience": "maintainer-architecture"
     },
     {
       "path": "docs/verification/dispatch-auth.md",
