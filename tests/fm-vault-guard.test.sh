@@ -421,12 +421,16 @@ run_spawn() {
   local home=$1 wt=$2 fakebin=$3 launchlog=$4
   shift 4
   : > "$launchlog"
+  # Every case here is a ship spawn, and fm-spawn requires an explicit --mode
+  # and --yolo for those. The values are irrelevant to vault-guard installation
+  # (the guard is unconditional across delivery posture); they only satisfy the
+  # intake contract so the spawn reaches the hook-install step under test.
   FM_ROOT_OVERRIDE='' FM_HOME="$home" \
     FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
     FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
     FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$wt" TMUX="fake,1,0" \
     FM_FAKE_LAUNCH_LOG="$launchlog" GROK_HOME="$home/grok-home" PATH="$fakebin:$PATH" \
-    "$SPAWN" "$@" 2>&1
+    "$SPAWN" "$@" --mode no-mistakes --yolo off 2>&1
 }
 
 test_spawn_installs_claude_vault_hook() {
@@ -498,7 +502,7 @@ test_spawn_installs_opencode_vault_plugin() {
   assert_contains "$(cat "$plugin")" "$ROOT/bin/fm-vault-pretool-check.sh" "opencode vault plugin must bake the absolute checker path"
   assert_contains "$(cat "$plugin")" 'throw new Error' "opencode vault plugin must block by throwing"
   node --check "$plugin" 2>/dev/null || fail "opencode vault plugin must be valid JS"
-  assert_present "$WT_DIR/.opencode/plugins/fm-turn-end.js" "the turn-end plugin must still be written"
+  assert_present "$WT_DIR/.opencode/plugins/fm-busy-state.js" "the busy-state/turn-end plugin must still be written"
   pass "fm-spawn: opencode crewmate gets the vault plugin alongside the turn-end plugin"
 }
 

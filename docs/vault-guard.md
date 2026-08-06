@@ -9,7 +9,7 @@ This document is the authoritative human-readable contract for the vault-guard P
 
 2026-07-30: a crewmate's first Infisical command listed secret VALUES into its local session transcript - the listing flag printed both names and values.
 The brief said names-only; instruction-following failed where enforcement did not exist, and the remedy was secret rotation.
-This seatbelt makes that failure structurally impossible: every value-printing infisical form is denied mechanically before it executes, in every crewmate, scout, secondmate, and primary session, so rotation is never again the remedy for an agent printing a secret.
+This seatbelt makes that failure structurally impossible for the installed Claude, Codex, Grok, OpenCode, and Pi adapters: value-printing infisical forms are denied mechanically before they execute in their primary, secondmate, crewmate, and scout sessions, so rotation is never again the remedy for an agent printing a secret.
 
 ## Policy
 
@@ -70,6 +70,7 @@ The grok global vault hook needs no token registry, unlike the turn-end hook: it
 - Codex crewmates: a project that tracks its own `.codex/hooks.json` is left untouched (overwriting a tracked file would dirty the worktree); `fm-spawn` warns loudly and that one task runs unguarded on the hook layer.
 - Codex crewmates: the spawn-shaped worktree `hooks.json` plus `--dangerously-bypass-hook-trust` is validated in `codex exec` mode (this document's record below); interactive-TUI hook loading rides the same general CLI flag but has not itself been observed live, so treat it as wired-but-unverified until a live codex crewmate exercises it.
 - Codex secondmate launches do not pass the hook-trust bypass flag; the tracked hooks.json entry loads under whatever hook trust the home already has, exactly like the pre-existing arm and cd entries there.
+- Kimi Code has no vault-guard integration yet; its primary and crewmate adapters install only the turn-end hook, so its sessions are outside this seatbelt's coverage.
 - Grok crewmates on a machine whose last-spawning firstmate home was deleted: the baked checker path dies and the global hook exits 0 (fail open) until the next grok spawn rewrites it.
 - The wrapper's `infisical export --format json` shapes were pinned against infisical 0.43.84; an upstream format change makes the wrapper abort (fail closed), never pass values through.
 
