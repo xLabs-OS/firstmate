@@ -480,7 +480,7 @@ tests/fm-backend-zellij-smoke.test.sh
 ```
 
 The real lifecycle smoke proved spawn, metadata, nested-subshell worktree discovery, send, capture, unlanded-work refusal, approved local landing, exact tab cleanup, and session cleanup without retaining task-specific ids or branch names here.
-The nested-subshell discovery leg of that evidence is superseded: spawn now records the worktree from `treehouse get --lease` and uses the same probe only to confirm the pane's arrival after a top-level `cd`, a shape the probe follows directly (regression: `tests/fm-spawn-worktree-settle.test.sh`); the send, capture, refusal, landing, and cleanup evidence stands.
+The nested-subshell discovery leg of that evidence is superseded: spawn now records the allocator's leased worktree and uses the same probe only to confirm the pane's arrival after a top-level `cd`, a shape the probe follows directly (regression: `tests/fm-spawn-worktree-settle.test.sh`); the send, capture, refusal, landing, and cleanup evidence stands.
 
 ## Orca
 

@@ -211,7 +211,7 @@ This generous floor is required for small composer and peek reads.
 
 `pane get`'s `cwd` field is frozen at pane creation, while `foreground_cwd` follows the live foreground process and the top-level shell's `cd`.
 While a foreground job's leader still sits in the shell's own directory, `foreground_cwd` reports the first job member whose cwd differs, which can be a transient child working elsewhere.
-Spawn therefore records the worktree from `treehouse get --lease` and uses this field only to confirm the pane arrived there (`bin/backends/herdr.sh`'s current-path op).
+Spawn therefore records the leased allocator path and uses this field only to confirm the pane arrived there (`bin/backends/herdr.sh`'s current-path op).
 
 Herdr's native agent state can read idle while a harness waits on its own long foreground tool.
 The shared crew-state path therefore accepts a native `busy` as evidence of activity but never a native `idle` as evidence that a worker has stopped; the task's own semantic busy state (`bin/fm-busy-lib.sh`) decides that.
