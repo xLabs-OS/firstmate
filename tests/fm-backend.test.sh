@@ -806,8 +806,26 @@ esac
 exit 0
 SH
   chmod +x "$fb/tmux"
-  fm_fake_exit0 "$fb" treehouse
+  make_spawn_fake_treehouse "$fb" "$wt"
   printf '%s\n' "$fb"
+}
+
+# make_spawn_fake_treehouse <fakebin> <worktree-path>: a treehouse whose
+# `get --lease` prints the baked-in worktree path, matching this file's
+# baked-path tmux stubs (the shared env-driven fm_fake_treehouse would need
+# per-invocation FM_FAKE_PANE_PATH exports these runners do not use).
+make_spawn_fake_treehouse() {
+  local fb=$1 wt=$2
+  cat > "$fb/treehouse" <<SH
+#!/usr/bin/env bash
+set -u
+case "\$*" in
+  *"get --help"*) printf '%s\\n' 'Usage: treehouse get [--lease] [--lease-holder <holder>]'; exit 0 ;;
+  get*--lease*) printf '%s\\n' "$wt"; exit 0 ;;
+esac
+exit 0
+SH
+  chmod +x "$fb/treehouse"
 }
 
 run_spawn_case() {  # <bin-root> <fakebin> <log> <state> <data> <config> <proj> -- <spawn args...>
@@ -839,7 +857,7 @@ run_spawn_case() {  # <bin-root> <fakebin> <log> <state> <data> <config> <proj> 
 
 # --- symlinked project prefix must not false-refuse the isolation guard -----
 #
-# docs/herdr-backend.md "Known gaps": a real backend's pane_current_path read
+# A real backend's pane_current_path read
 # (tmux, herdr) reports the OS-level PHYSICALLY-resolved cwd. When the project
 # itself lives under a symlinked prefix (e.g. macOS's /tmp -> /private/tmp),
 # fm-spawn.sh's PROJ_ABS - a logical `cd && pwd` - differs string-for-string
@@ -876,7 +894,7 @@ esac
 exit 0
 SH
   chmod +x "$fb/tmux"
-  fm_fake_exit0 "$fb" treehouse
+  make_spawn_fake_treehouse "$fb" "$wt"
   printf '%s\n' "$fb"
 }
 
