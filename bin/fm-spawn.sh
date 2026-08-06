@@ -1972,8 +1972,7 @@ EOF
       # wiring is installed. The turn-end NOTIFICATION marker still rides
       # the launch command via -c notify=[...] and __TURNEND__.
       #
-      # codex: turn-end rides the launch command via -c notify=[...] and
-      # __TURNEND__. The vault guard needs a worktree .codex/hooks.json (codex
+      # The vault guard needs a worktree .codex/hooks.json (codex
       # loads hooks from the cwd), which the launch template's
       # --dangerously-bypass-hook-trust lets load without a trust dialog. A
       # project that tracks its own .codex/hooks.json is left untouched -
