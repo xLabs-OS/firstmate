@@ -318,7 +318,17 @@ test_codex_unverified_until_a_semantic_source_exists() {
   expect_code 0 $? "codex spawn should succeed: $out"
   state="$HOME_DIR/state"
   assert_absent "$state/$id.busy-gen" "codex must not arm a busy contract with no verified semantic source"
-  assert_absent "$WT_DIR/.codex/hooks.json" "codex must not install unverified busy hooks"
+  # The worktree hooks.json is shared by two unrelated installers: the busy
+  # wiring this test guards, and the vault-guard PreToolUse seatbelt
+  # (docs/vault-guard.md), which is a security control that must be installed
+  # for every codex crewmate. So assert the absence of busy WIRING rather than
+  # the absence of the file - a bare file-absence check silently forbids the
+  # seatbelt. fm-busy-lib.sh never reads this file for classification, so a
+  # vault-only hooks.json cannot make codex look verified.
+  if [ -e "$WT_DIR/.codex/hooks.json" ]; then
+    assert_not_contains "$(cat "$WT_DIR/.codex/hooks.json")" 'fm-busy-event.sh' \
+      "codex must not install unverified busy hooks"
+  fi
   assert_contains "$out" 'spawned '"$id"' harness=codex' "codex spawn did not complete normally"
   out=$(classify codex "$id" "$state")
   [ "$out" = "unknown codex-unverified" ] || fail "codex must classify 'unknown codex-unverified', got '$out'"
