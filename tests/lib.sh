@@ -170,6 +170,41 @@ SH
   done
 }
 
+# fm_fake_treehouse <fakebin>: a fake treehouse for spawn tests. `get --lease`
+# prints the worktree path fm-spawn.sh must record - FM_FAKE_LEASE_PATH when
+# set, otherwise FM_FAKE_PANE_PATH, the settled-path variable spawn tests
+# already export - so most tests need no per-invocation change. Every call is
+# appended to FM_FAKE_TREEHOUSE_LOG when that is set, letting a test assert
+# that the lease was taken or released. Divergence tests (probe disagrees
+# with the allocation) set FM_FAKE_LEASE_PATH explicitly.
+fm_fake_treehouse() {
+  local fakebin=$1
+  cat > "$fakebin/treehouse" <<'SH'
+#!/usr/bin/env bash
+set -u
+[ -z "${FM_FAKE_TREEHOUSE_LOG:-}" ] || printf '%s\n' "$*" >> "$FM_FAKE_TREEHOUSE_LOG"
+case "${1:-}" in
+  get)
+    case "$*" in
+      *--help*)
+        printf '%s\n' 'Usage: treehouse get [--lease] [--lease-holder <holder>]'
+        ;;
+      *--lease*)
+        lease="${FM_FAKE_LEASE_PATH:-${FM_FAKE_PANE_PATH:-}}"
+        if [ -z "$lease" ]; then
+          echo "fake treehouse: no lease path configured" >&2
+          exit 1
+        fi
+        printf '%s\n' "$lease"
+        ;;
+    esac
+    ;;
+esac
+exit 0
+SH
+  chmod +x "$fakebin/treehouse"
+}
+
 # fm_fake_version_tool <fakebin> <tool> <override-env-var> <default-version>
 # The stub answers `--version` with <override-env-var> when that variable is set
 # and non-empty, and with <default-version> otherwise; every other invocation

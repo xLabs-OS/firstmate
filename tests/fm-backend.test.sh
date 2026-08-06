@@ -806,8 +806,26 @@ esac
 exit 0
 SH
   chmod +x "$fb/tmux"
-  fm_fake_exit0 "$fb" treehouse
+  make_spawn_fake_treehouse "$fb" "$wt"
   printf '%s\n' "$fb"
+}
+
+# make_spawn_fake_treehouse <fakebin> <worktree-path>: a treehouse whose
+# `get --lease` prints the baked-in worktree path, matching this file's
+# baked-path tmux stubs (the shared env-driven fm_fake_treehouse would need
+# per-invocation FM_FAKE_PANE_PATH exports these runners do not use).
+make_spawn_fake_treehouse() {
+  local fb=$1 wt=$2
+  cat > "$fb/treehouse" <<SH
+#!/usr/bin/env bash
+set -u
+case "\$*" in
+  *"get --help"*) printf '%s\\n' 'Usage: treehouse get [--lease] [--lease-holder <holder>]'; exit 0 ;;
+  get*--lease*) printf '%s\\n' "$wt"; exit 0 ;;
+esac
+exit 0
+SH
+  chmod +x "$fb/treehouse"
 }
 
 run_spawn_case() {  # <bin-root> <fakebin> <log> <state> <data> <config> <proj> -- <spawn args...>
@@ -839,14 +857,15 @@ run_spawn_case() {  # <bin-root> <fakebin> <log> <state> <data> <config> <proj> 
 
 # --- symlinked project prefix must not false-refuse the isolation guard -----
 #
-# docs/herdr-backend.md "Known gaps": a real backend's pane_current_path read
+# A real backend's pane_current_path read
 # (tmux, herdr) reports the OS-level PHYSICALLY-resolved cwd. When the project
 # itself lives under a symlinked prefix (e.g. macOS's /tmp -> /private/tmp),
 # fm-spawn.sh's PROJ_ABS - a logical `cd && pwd` - differs string-for-string
 # from that physical read even before treehouse moves the pane at all, so the
-# worktree-discovery poll used to mistake an UNMOVED pane for one that had
-# already left the project, handing validate_spawn_worktree the project's own
-# directory as "the worktree" and tripping its false isolation refusal.
+# old worktree discovery could mistake an UNMOVED pane for one that had already
+# left the project, handing validate_spawn_worktree the project's own directory
+# as "the worktree" and tripping its false isolation refusal. Current worktree
+# confirmation compares the allocator path using the same canonical form.
 # make_spawn_symlink_fakebin's tmux stub returns an unmoved project path on the
 # first pane_current_path poll, then the real worktree path from the second poll
 # onward, so this test fails loudly if the PROJ_ABS/PROJ_ABS_REAL
@@ -876,7 +895,7 @@ esac
 exit 0
 SH
   chmod +x "$fb/tmux"
-  fm_fake_exit0 "$fb" treehouse
+  make_spawn_fake_treehouse "$fb" "$wt"
   printf '%s\n' "$fb"
 }
 

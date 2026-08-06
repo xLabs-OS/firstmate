@@ -8,10 +8,11 @@
 # default (tmux, `backend=` absent) path stays byte-identical. Sourced only
 # through bin/fm-backend.sh's fm_backend_source, never directly.
 #
-# Worktree acquisition (running `treehouse get` inside the pane, and polling
-# its cwd) is unchanged by this extraction: P1 scopes only the session
-# provider, not the worktree provider, so fm-spawn.sh still drives that part
-# inline with these same send/current-path primitives.
+# Worktree acquisition (fm-spawn.sh leasing the worktree from
+# `treehouse get --lease`, cd-ing the pane into it, and confirming arrival
+# through the current-path probe) stays inline in fm-spawn.sh: P1 scopes only
+# the session provider, not the worktree provider, so fm-spawn.sh drives that
+# part with these same send/current-path primitives.
 #
 # The verified composer/busy-detection and verify-and-retry-submit primitives
 # already live in bin/fm-tmux-lib.sh, shared with the away-mode daemon
@@ -81,9 +82,9 @@ fm_backend_tmux_container_ensure() {
 #     ("$ses:"), so a non-default base-index (e.g. base-index 1) cannot collide.
 #   - PIN the window name by disabling automatic-rename and allow-rename on the
 #     new window: the captain's tmux may rename the window away from fm-<id> once
-#     treehouse cd's into the worktree, which would break name-based targeting.
+#     the pane cds into the worktree, which would break name-based targeting.
 # The returned window id lets callers target the window even if its name is ever
-# lost, so worktree discovery cannot fall back to the active client's window.
+# lost, so worktree confirmation cannot fall back to the active client's window.
 fm_backend_tmux_create_task() {  # <session> <window-name> <proj-abs> -> prints window id
   local ses=$1 wname=$2 proj_abs=$3 wid
   if tmux list-windows -t "$ses" -F '#{window_name}' | grep -qx "$wname"; then
@@ -97,7 +98,7 @@ fm_backend_tmux_create_task() {  # <session> <window-name> <proj-abs> -> prints 
 }
 
 # fm_backend_tmux_current_path: the live pane's current working directory, or
-# empty on any tmux error. Mirrors fm-spawn.sh's worktree-discovery poll:
+# empty on any tmux error. Mirrors fm-spawn.sh's worktree-confirmation poll:
 # `tmux display-message -p -t "$T" '#{pane_current_path}'`.
 fm_backend_tmux_current_path() {  # <target>
   tmux display-message -p -t "$1" '#{pane_current_path}' 2>/dev/null
@@ -105,7 +106,7 @@ fm_backend_tmux_current_path() {  # <target>
 
 # fm_backend_tmux_send_text_line: send one line of TEXT then Enter, with no
 # composer verification - used for the fixed spawn-time commands
-# (`treehouse get`, the GOTMPDIR export) that already ran this exact sequence
+# (the worktree cd, the GOTMPDIR export) that already ran this exact sequence
 # inline in fm-spawn.sh. Mirrors `tmux send-keys -t "$T" "<text>" Enter`.
 fm_backend_tmux_send_text_line() {  # <target> <text>
   tmux send-keys -t "$1" "$2" Enter
