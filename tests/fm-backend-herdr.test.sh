@@ -1672,8 +1672,11 @@ assert_projection_close_failed_removal_rolls_back_the_reposition() {
   dir="$TMP_ROOT/close-move-rollback-$mode"; mkdir -p "$dir/responses"
   log="$dir/log"; resp="$dir/responses"; : > "$log"
   # Doomed w1 sits BEFORE the focused w2 (not last): the plan repositions it
-  # to the end; then every removal path fails, so the exact original order
-  # must be restored under the same session lock and the close must fail.
+  # to the end; then the close itself fails with the PANE STILL ALIVE, so
+  # the workspace is not doomed after all and the exact original order must
+  # be restored under the same session lock while the close reports failure.
+  # (A close whose pane IS proven gone never rolls back - the lagging and
+  # parked-last tests below own that contract.)
   printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"w1","active_tab_id":"w1:t1","focused":false},{"workspace_id":"w2","active_tab_id":"w2:t1","focused":true},{"workspace_id":"w3","active_tab_id":"w3:t1","focused":false}]}}' > "$resp/1.out"
   printf '%s\n' '{"result":{"tabs":[{"tab_id":"w2:t1","focused":true}]}}' > "$resp/2.out"
   printf '%s\n' '{"result":{"pane":{"pane_id":"w1:p1","tab_id":"w1:t1","workspace_id":"w1"}}}' > "$resp/3.out"
@@ -1686,18 +1689,11 @@ assert_projection_close_failed_removal_rolls_back_the_reposition() {
   printf '%s\n' '{"sessions":[{"name":"fmtest","running":true,"socket_path":"/tmp/fmtest.sock"}]}' > "$resp/9.out"
   bash -c 'trap "" HUP; sleep 300' & bgpid=$!
   death_process_info_fixture w1:p1 "$bgpid" > "$resp/10.out"
-  if [ "$mode" = pane-gone-workspace-present ]; then
-    printf '%s\n' '{"error":{"code":"pane_not_found"}}' > "$resp/11.out"
-    printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"w2","active_tab_id":"w2:t1","focused":true},{"workspace_id":"w3","active_tab_id":"w3:t1","focused":false},{"workspace_id":"w1","active_tab_id":"w1:t2","focused":false}]}}' > "$resp/12.out"
-    printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"w1","active_tab_id":"w1:t2","focused":false},{"workspace_id":"w2","active_tab_id":"w2:t1","focused":true},{"workspace_id":"w3","active_tab_id":"w3:t1","focused":false}]}}' > "$resp/13.out"
-    printf '%s\n' '{"result":{"tabs":[{"tab_id":"w2:t1","focused":true}]}}' > "$resp/14.out"
-  else
-    cp "$resp/3.out" "$resp/11.out"  # SIGHUP poll 1: pane still present
-    cp "$resp/3.out" "$resp/12.out"  # SIGHUP poll 2: pane still present
-    death_process_info_fixture w1:p1 "$bgpid" > "$resp/13.out"  # escalation resample: same owner
-    cp "$resp/3.out" "$resp/14.out"  # SIGKILL poll 1: pane still present
-    cp "$resp/3.out" "$resp/15.out"  # SIGKILL poll 2: pane still present
-  fi
+  cp "$resp/3.out" "$resp/11.out"  # SIGHUP poll 1: pane still present
+  cp "$resp/3.out" "$resp/12.out"  # SIGHUP poll 2: pane still present
+  death_process_info_fixture w1:p1 "$bgpid" > "$resp/13.out"  # escalation resample: same owner
+  cp "$resp/3.out" "$resp/14.out"  # SIGKILL poll 1: pane still present
+  cp "$resp/3.out" "$resp/15.out"  # SIGKILL poll 2: pane still present
   if [ "$mode" = command-fails ]; then
     printf '9\n' > "$resp/16.exit"
     printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"w1","active_tab_id":"w1:t1","focused":false},{"workspace_id":"w2","active_tab_id":"w2:t1","focused":true},{"workspace_id":"w3","active_tab_id":"w3:t1","focused":false}]}}' > "$resp/17.out"
@@ -1733,8 +1729,99 @@ assert_projection_close_failed_removal_rolls_back_the_reposition() {
 test_projection_close_failed_removal_rolls_back_the_reposition() {
   assert_projection_close_failed_removal_rolls_back_the_reposition command-fails
   assert_projection_close_failed_removal_rolls_back_the_reposition command-succeeds-pane-present
-  assert_projection_close_failed_removal_rolls_back_the_reposition pane-gone-workspace-present
-  pass "herdr presentation cleanup: every unconfirmed removal restores the exact original workspace order and reports failure"
+  pass "herdr presentation cleanup: a failed close with the pane alive restores the exact original workspace order and reports failure"
+}
+
+# write_reposition_close_prelude <resp> <bgpid>: canned responses 1-10 for a
+# doomed w1 sitting BEFORE the focused w2 (not last), through snapshot, exact
+# pane, emptying plan, move capability, socket, and idle-shell proof - the
+# shared setup of the post-reposition removal-confirmation fixtures below.
+write_reposition_close_prelude() {  # <resp> <bgpid>
+  local resp=$1 bgpid=$2
+  printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"w1","active_tab_id":"w1:t1","focused":false},{"workspace_id":"w2","active_tab_id":"w2:t1","focused":true},{"workspace_id":"w3","active_tab_id":"w3:t1","focused":false}]}}' > "$resp/1.out"
+  printf '%s\n' '{"result":{"tabs":[{"tab_id":"w2:t1","focused":true}]}}' > "$resp/2.out"
+  printf '%s\n' '{"result":{"pane":{"pane_id":"w1:p1","tab_id":"w1:t1","workspace_id":"w1"}}}' > "$resp/3.out"
+  printf '%s\n' '{"result":{"tabs":[{"tab_id":"w1:t1","workspace_id":"w1"}]}}' > "$resp/4.out"
+  printf '%s\n' '{"result":{"panes":[{"pane_id":"w1:p1","tab_id":"w1:t1"}]}}' > "$resp/5.out"
+  cp "$resp/1.out" "$resp/6.out"
+  printf '%s\n' '{"client":{"version":"0.7.5","protocol":16},"server":{"running":true}}' > "$resp/7.out"
+  # shellcheck disable=SC2016 # $defs is a literal JSON Schema key.
+  printf '%s\n' '{"schemas":{"request":{"oneOf":[{"properties":{"method":{"const":"workspace.move"}}}],"$defs":{"WorkspaceMoveParams":{"required":["workspace_id","insert_index"],"properties":{"insert_index":{"type":"integer"}}}}}}}' > "$resp/8.out"
+  printf '%s\n' '{"sessions":[{"name":"fmtest","running":true,"socket_path":"/tmp/fmtest.sock"}]}' > "$resp/9.out"
+  death_process_info_fixture w1:p1 "$bgpid" > "$resp/10.out"
+}
+
+# Herdr removes an emptied workspace on a tick AFTER reaping its dead pane
+# and tab, so the first presence read after a confirmed pane death routinely
+# still sees the doomed workspace (live: the real-Herdr presentation E2E's
+# projected teardown in CI run 31130627813 - the old single read treated the
+# lag as a failed removal and rolled the safety move back, and the lagging
+# removal then threw focus onto the focused workspace's right neighbor).
+# The removal confirmation must absorb that lag within its bounded poll.
+test_projection_close_lagging_workspace_removal_confirms_within_budget() {
+  local dir log resp fb out status bgpid
+  dir="$TMP_ROOT/close-removal-lags"; mkdir -p "$dir/responses"
+  log="$dir/log"; resp="$dir/responses"; : > "$log"
+  sleep 300 & bgpid=$!
+  write_reposition_close_prelude "$resp" "$bgpid"
+  printf '%s\n' '{"error":{"code":"pane_not_found"}}' > "$resp/11.out"
+  # Presence poll 1: the pane is gone but the emptied workspace still lists,
+  # parked last by the reposition; poll 2: the lagging removal completed.
+  printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"w2","active_tab_id":"w2:t1","focused":true},{"workspace_id":"w3","active_tab_id":"w3:t1","focused":false},{"workspace_id":"w1","active_tab_id":"w1:t2","focused":false}]}}' > "$resp/12.out"
+  printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"w2","active_tab_id":"w2:t1","focused":true},{"workspace_id":"w3","active_tab_id":"w3:t1","focused":false}]}}' > "$resp/13.out"
+  cp "$resp/13.out" "$resp/14.out"
+  printf '%s\n' '{"result":{"tabs":[{"tab_id":"w2:t1","focused":true}]}}' > "$resp/15.out"
+  make_death_lab "$dir" "$bgpid"
+  printf '%s\n' '{"id":"fm-workspace-move","result":{"type":"workspace_list","workspaces":[{"workspace_id":"w2","focused":true},{"workspace_id":"w3","focused":false},{"workspace_id":"w1","focused":false}]}}' > "$dir/mover-response"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$(PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_HERDR_SCRIPT_STATUS=1 \
+    FM_HERDR_PS_BIN="$dir/ps" FM_BACKEND_HERDR_WORKSPACE_MOVER="$dir/mover" \
+    FM_FAKE_MOVER_LOG="$dir/mover.log" FM_FAKE_MOVER_RESPONSE="$dir/mover-response" \
+    FM_BACKEND_HERDR_DEATH_CLOSE_POLLS=2 \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_projection_close_pane_focus_preserving fmtest w1:p1' "$ROOT" 2>&1)
+  status=$?
+  kill "$bgpid" 2>/dev/null || true; wait "$bgpid" 2>/dev/null || true
+  [ "$status" -eq 0 ] || fail "a removal that completes within the presence poll must confirm the close: $out"
+  [ "$(wc -l < "$dir/mover.log" | tr -d ' ')" = 1 ] \
+    || fail "a confirmed lagging removal must not roll the reposition back: $(cat "$dir/mover.log")"
+  assert_not_contains "$(cat "$log")" $'tab\x1ffocus' "a confirmed lagging removal moved focus"
+  pass "herdr presentation cleanup: a lagging workspace removal confirms within the bounded presence poll without a rollback"
+}
+
+# When the emptied workspace outlives the whole presence poll, the close is
+# unconfirmed - but the pane's death is already proven, so the doomed
+# workspace must stay parked behind the focused one: rolling it back ahead
+# would re-arm the stale-index focus jump at the moment the removal lands.
+test_projection_close_unremoved_workspace_parks_last_without_rollback() {
+  local dir log resp fb out status bgpid
+  dir="$TMP_ROOT/close-removal-parks"; mkdir -p "$dir/responses"
+  log="$dir/log"; resp="$dir/responses"; : > "$log"
+  sleep 300 & bgpid=$!
+  write_reposition_close_prelude "$resp" "$bgpid"
+  printf '%s\n' '{"error":{"code":"pane_not_found"}}' > "$resp/11.out"
+  # Every presence poll and the restore snapshot still list the emptied
+  # workspace, parked last by the reposition.
+  printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"w2","active_tab_id":"w2:t1","focused":true},{"workspace_id":"w3","active_tab_id":"w3:t1","focused":false},{"workspace_id":"w1","active_tab_id":"w1:t2","focused":false}]}}' > "$resp/12.out"
+  cp "$resp/12.out" "$resp/13.out"
+  cp "$resp/12.out" "$resp/14.out"
+  printf '%s\n' '{"result":{"tabs":[{"tab_id":"w2:t1","focused":true}]}}' > "$resp/15.out"
+  make_death_lab "$dir" "$bgpid"
+  printf '%s\n' '{"id":"fm-workspace-move","result":{"type":"workspace_list","workspaces":[{"workspace_id":"w2","focused":true},{"workspace_id":"w3","focused":false},{"workspace_id":"w1","focused":false}]}}' > "$dir/mover-response"
+  fb=$(make_herdr_fakebin "$dir")
+  out=$(PATH="$fb:$PATH" FM_HERDR_LOG="$log" FM_HERDR_RESPONSES="$resp" FM_HERDR_SCRIPT_STATUS=1 \
+    FM_HERDR_PS_BIN="$dir/ps" FM_BACKEND_HERDR_WORKSPACE_MOVER="$dir/mover" \
+    FM_FAKE_MOVER_LOG="$dir/mover.log" FM_FAKE_MOVER_RESPONSE="$dir/mover-response" \
+    FM_BACKEND_HERDR_DEATH_CLOSE_POLLS=2 \
+    bash -c '. "$0/bin/backends/herdr.sh"; fm_backend_herdr_projection_close_pane_focus_preserving fmtest w1:p1' "$ROOT" 2>&1)
+  status=$?
+  kill "$bgpid" 2>/dev/null || true; wait "$bgpid" 2>/dev/null || true
+  [ "$status" -ne 0 ] || fail "an unconfirmed removal past the poll budget must report failure: $out"
+  [ "$(wc -l < "$dir/mover.log" | tr -d ' ')" = 1 ] \
+    || fail "an unconfirmed removal with the pane proven gone must not roll the reposition back: $(cat "$dir/mover.log")"
+  printf '%s' "$out" | grep -Fq "parked behind the focused one" \
+    || fail "the parked-last warning was not reported: $out"
+  assert_not_contains "$(cat "$log")" $'tab\x1ffocus' "an unconfirmed parked-last removal moved focus"
+  pass "herdr presentation cleanup: an unremoved doomed workspace stays parked last, reported and without a rollback"
 }
 
 test_kill_emptying_non_focused_uses_pane_death() {
@@ -3989,6 +4076,8 @@ test_projection_close_death_failure_falls_back_to_plain_close
 test_projection_close_death_still_restores_a_stolen_focus
 test_projection_close_death_never_sigkills_a_reused_pid
 test_projection_close_failed_removal_rolls_back_the_reposition
+test_projection_close_lagging_workspace_removal_confirms_within_budget
+test_projection_close_unremoved_workspace_parks_last_without_rollback
 test_kill_emptying_non_focused_uses_pane_death
 test_kill_focused_workspace_stays_plain_close
 test_endpoint_confirmed_gone_gates_on_structured_presence

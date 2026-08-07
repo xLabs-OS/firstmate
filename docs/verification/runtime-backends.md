@@ -392,7 +392,7 @@ tests/fm-backend-herdr.test.sh
 
 Observed guarantees: a contended presentation lock refused the teardown before the isolated copy was returned, with the task branch, every durable record, and the endpoint intact and no pane close attempted; the retry after the contention cleared returned the copy, closed the pane under the lock, and removed the records; an unknown structured-presence result after an attempted projected close retained the journal and every record with a nonzero exit; and every presence-gate mode accepted only a structured not-found as gone.
 
-The same fixtures verified three further boundaries on 2026-07-29: missing or malformed endpoint identity and an unparseable pane presence refused record removal with everything retained; the SIGKILL escalation re-read the exact pane's process information and refused to signal when a different shell pid owned the pane, falling back to the plain close with the original process untouched; and a reposition whose removal then failed on every path restored the exact original workspace order through a second verified move and reported the close as failed.
+The same fixtures verified three further boundaries on 2026-07-29: missing or malformed endpoint identity and an unparseable pane presence refused record removal with everything retained; the SIGKILL escalation re-read the exact pane's process information and refused to signal when a different shell pid owned the pane, falling back to the plain close with the original process untouched; and a reposition whose close then failed with the pane still alive restored the exact original workspace order through a second verified move and reported the close as failed.
 
 The teardown fixture was re-run on 2026-07-31 after extending the same fail-closed boundary through forced secondmate cleanup, including recursive cleanup of a nested secondmate whose Herdr grandchild close remains unconfirmed.
 
@@ -404,7 +404,8 @@ ok - forced secondmate teardown retains Herdr child identity until exact pane di
 ok - forced teardown retains a nested secondmate home and its grandchild's Herdr identity when the grandchild close is unconfirmed
 ```
 
-### Composer and operational input
+On 2026-08-06 the real-Herdr presentation E2E in CI run 31130627813 (pinned Herdr 0.7.4 on ubuntu-latest) refuted the single-read removal confirmation the 2026-07-29 rollback boundary had assumed: the server reaps a dead pane and its tab immediately but removes the emptied workspace on a later tick, so the immediate presence read after a confirmed pane death saw the doomed workspace still present, rolled the reposition back, and the lagging removal then threw focus onto the focused workspace's right neighbor (`projected teardown changed active workspace/tab from w4/w4:t1 to w9/w9:t2`), exactly the stale-index rule above.
+The close now confirms removal with a bounded poll on the pane-death budget and never rolls the reposition back once the pane's death is confirmed, leaving an unremoved doomed workspace parked last with a loud warning; `tests/fm-backend-herdr.test.sh` pins both sides portably (`lagging workspace removal confirms within the bounded presence poll`, `unremoved doomed workspace stays parked last`), and the presentation E2E above remains the live refresh command for this guarantee.
 
 Real captures verified these active distinctions:
 

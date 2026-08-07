@@ -651,7 +651,7 @@ fm_backend_herdr_projection_focus_restore() {  # <session> <snapshot> <operation
 # exactly as before this hardening.
 fm_backend_herdr_projection_close_pane_focus_preserving() {  # <session> <pane-id> [required-agent-state]
   local session=$1 pane_id=$2 required_agent_state=${3:-}
-  local before active_tab info target_pane target_tab target_ws close_status state plan plan_shell_pid plan_move_record workspace_presence
+  local before active_tab info target_pane target_tab target_ws close_status state plan plan_shell_pid plan_move_record
   FM_BACKEND_HERDR_PROJECTION_CLOSE_AGENT_STATE=""
   [ -n "$pane_id" ] || return 0
   before=$(fm_backend_herdr_projection_focus_snapshot "$session") || {
@@ -714,10 +714,15 @@ fm_backend_herdr_projection_close_pane_focus_preserving() {  # <session> <pane-i
     close_status=1
   fi
   if [ "$close_status" -eq 0 ] && [ -n "$plan_move_record" ]; then
-    workspace_presence=$(fm_backend_herdr_workspace_presence_state "$session" "$target_ws")
-    if [ "$workspace_presence" != dead ]; then
-      echo "warning: herdr presentation cleanup did not confirm removal of the repositioned workspace" >&2
+    if ! fm_backend_herdr_workspace_removal_confirmed "$session" "$target_ws"; then
+      echo "warning: herdr presentation cleanup did not confirm removal of the repositioned workspace; leaving it parked behind the focused one" >&2
       close_status=1
+      # The pane's death is confirmed, so the emptied workspace is doomed:
+      # rolling it back ahead of the focused workspace would re-arm the
+      # stale-index focus jump the reposition exists to prevent (see the
+      # workspace-removal focus rules below) at the moment the lagging
+      # removal completes. Parked last is the focus-safe terminal position.
+      plan_move_record=
     fi
   fi
   if [ "$close_status" -ne 0 ]; then
@@ -740,6 +745,17 @@ fm_backend_herdr_projection_close_pane_focus_preserving() {  # <session> <pane-i
 #   sat behind it (or the focused workspace was last), and moves focus to the
 #   focused workspace's right neighbor otherwise (upstream issue #1621, fixed
 #   by PR #1912, commit a979916).
+# - Workspace removal after a pane death is a LATER step of that cascade:
+#   the server reaps the dead pane and its tab immediately, but the emptied
+#   workspace disappears on a subsequent tick, so one immediate presence
+#   read after a confirmed pane death routinely still sees the doomed
+#   workspace (observed live: the real-Herdr presentation E2E's projected
+#   teardown, CI run 31130627813, focus thrown to the focused workspace's
+#   right neighbor exactly per the stale-index rule above). Removal is
+#   therefore confirmed by a bounded poll, and once the lone pane's death
+#   is confirmed the repositioning move is never rolled back: restoring a
+#   doomed empty workspace ahead of the focused one re-arms that jump at
+#   the moment the lagging removal completes.
 # Both fixes are merged upstream but in no release as of 2026-07-28.
 # Firstmate therefore removes a doomed non-focused workspace by ending its
 # verified lone idle shell (the pane-death path), repositioning it behind the
@@ -1636,6 +1652,27 @@ fm_backend_herdr_workspace_presence_state() {  # <session> <workspace_id>
     1) printf 'present' ;;
     *) printf 'unknown' ;;
   esac
+}
+
+# fm_backend_herdr_workspace_removal_confirmed: wait for the emptied
+# <workspace_id> to disappear after its last pane's confirmed death.
+# Pane death and workspace removal are separate steps of the server's death
+# cascade - the dead pane and its tab drop immediately, the emptied
+# workspace on a later tick - so one immediate presence read routinely still
+# sees the doomed workspace (the workspace-removal focus rules comment owns
+# the live evidence). Poll with the pane-death confirmation's own budget:
+# this is the same cascade one step later, and a test that bounds one bounds
+# both.
+fm_backend_herdr_workspace_removal_confirmed() {  # <session> <workspace_id>
+  local session=$1 workspace_id=$2 attempt=0 max_attempts presence
+  max_attempts=${FM_BACKEND_HERDR_DEATH_CLOSE_POLLS:-40}
+  while :; do
+    presence=$(fm_backend_herdr_workspace_presence_state "$session" "$workspace_id")
+    [ "$presence" = dead ] && return 0
+    attempt=$((attempt + 1))
+    [ "$attempt" -lt "$max_attempts" ] || return 1
+    sleep 0.05
+  done
 }
 
 # fm_backend_herdr_explicit_close_pane_confirmed: issue one explicit close and
@@ -2761,7 +2798,7 @@ fm_backend_herdr_send_text_submit() {  # <target> <text> <retries> <enter-sleep>
 # back to the plain close, matching the pre-hardening contract.
 fm_backend_herdr_kill_serialized() {  # <session> <pane>
   local session=$1 pane=$2
-  local before active_tab info target_pane target_tab target_ws plan shell_pid plan_move_record close_failed workspace_presence
+  local before active_tab info target_pane target_tab target_ws plan shell_pid plan_move_record close_failed
   before=$(fm_backend_herdr_projection_focus_snapshot "$session") || before=
   if [ -n "$before" ]; then
     active_tab=${before#*$'\t'}
@@ -2792,10 +2829,14 @@ fm_backend_herdr_kill_serialized() {  # <session> <pane>
           ;;
       esac
       if [ "$close_failed" = 0 ] && [ -n "$plan_move_record" ]; then
-        workspace_presence=$(fm_backend_herdr_workspace_presence_state "$session" "$target_ws")
-        if [ "$workspace_presence" != dead ]; then
-          echo "warning: herdr task kill did not confirm removal of the repositioned workspace" >&2
+        if ! fm_backend_herdr_workspace_removal_confirmed "$session" "$target_ws"; then
+          echo "warning: herdr task kill did not confirm removal of the repositioned workspace; leaving it parked behind the focused one" >&2
           close_failed=1
+          # Same contract as the projected cleanup above: with the pane's
+          # death confirmed, never roll the doomed workspace back ahead of
+          # the focused one - that re-arms the stale-index focus jump when
+          # the lagging removal completes.
+          plan_move_record=
         fi
       fi
       if [ "$close_failed" = 1 ]; then
