@@ -374,7 +374,15 @@ fi
 # This is the first cleanup authorization check. It is metadata-only and must
 # complete before fm-guard, a backend command, file removal, branch deletion,
 # worktree return, registry change, or process termination can run.
-fm_backend_validate_task_endpoint "$META" "$ID" || exit 1
+if [ "$(grep -c '^backend=herdr$' "$META" 2>/dev/null || true)" = 1 ] \
+   && [ ! -r "$SCRIPT_DIR/backends/herdr.sh" ]; then
+  echo "error: herdr teardown prerequisites are unavailable for $ID; nothing was changed - restore the adapter and rerun teardown" >&2
+  exit 1
+fi
+if ! fm_backend_validate_task_endpoint "$META" "$ID"; then
+  echo "error: task endpoint validation is unavailable for $ID; nothing was changed" >&2
+  exit 1
+fi
 BACKEND=$FM_BACKEND_VALIDATED_BACKEND
 T=$FM_BACKEND_VALIDATED_TARGET
 WT=$(fm_meta_get "$META" worktree)
@@ -2188,6 +2196,40 @@ if [ -d "$WT" ] && [ "$FORCE" != "--force" ]; then
       exit 1
     fi
   fi
+fi
+
+# Herdr observes a pane's foreground process exiting before teardown's generic
+# worktree reaper can hand control to the focus-preserving close path. Close
+# the exact recorded endpoint under its session lock first, or reaping that
+# process can trigger Herdr's last-pane focus jump outside the protection.
+if [ "$BACKEND" = herdr ]; then
+  HERDR_PRE_REAP_JOURNAL="$STATE/$ID.herdr-presentation"
+  HERDR_PRE_REAP_JOURNAL_MATCHED=0
+  if ! teardown_herdr_preflight_target "$T" "$ID"; then
+    echo "error: herdr pre-reap close cannot start for $ID; nothing was changed" >&2
+    exit 1
+  fi
+  fm_backend_herdr_parse_target "$T" || exit 1
+  if [ -e "$HERDR_PRE_REAP_JOURNAL" ] || [ -L "$HERDR_PRE_REAP_JOURNAL" ]; then
+    if fm_backend_herdr_projection_endpoint_matches_journal \
+      "$FM_BACKEND_HERDR_SESSION" "$(meta_value "$META" herdr_workspace_id)" \
+      "$HERDR_PRE_REAP_JOURNAL" "$ID"; then
+      HERDR_PRE_REAP_JOURNAL_MATCHED=1
+    fi
+  fi
+  if ! teardown_herdr_session_lock_held "$FM_BACKEND_HERDR_SESSION"; then
+    echo "error: herdr session presentation lock is unavailable for $ID; retaining every durable task record" >&2
+    exit 1
+  fi
+  fm_backend_herdr_kill_serialized "$FM_BACKEND_HERDR_SESSION" "$FM_BACKEND_HERDR_PANE" 2>/dev/null || true
+  if ! fm_backend_herdr_endpoint_confirmed_gone "$T"; then
+    if [ "$HERDR_PRE_REAP_JOURNAL_MATCHED" = 1 ]; then
+      echo "warning: exact herdr task-pane close could not be confirmed for $ID; retaining the presentation journal and attempting no workspace cleanup" >&2
+    fi
+    echo "error: herdr pane $T for $ID is not confirmed gone before worktree reaping; retaining every durable task record" >&2
+    exit 1
+  fi
+  [ "$HERDR_PRE_REAP_JOURNAL_MATCHED" != 1 ] || rm -f "$HERDR_PRE_REAP_JOURNAL"
 fi
 
 # Every landed/discard-work refusal above has now passed (or --force skipped
