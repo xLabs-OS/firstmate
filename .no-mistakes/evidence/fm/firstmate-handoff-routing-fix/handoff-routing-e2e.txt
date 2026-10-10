@@ -1,0 +1,9 @@
+Stable completion identities after status-log compaction
+  event=11111111111111111111111111111111 record=16b2c3f53910
+  event=22222222222222222222222222222222 record=63b9b6565a0a
+  event=33333333333333333333333333333333 record=308f2cc89090
+  durable_records=3 queued_idle_checks=3 open_marker=16b2c3f53910
+Worker-visible generated status command result
+  needs-validation [at=1700000400] [event=14e705fbc6aaed0156d0bf0eb7e2910a]: implementation committed
+Parent relay for an event-tagged direct-PR completion
+  done [key=child-outcome-direct-done-4a8c1bc5]: child direct done: PR https://example.test/owner/repo/pull/71 checks green pr=https://example.test/owner/repo/pull/71 mode=direct-PR yolo=off
