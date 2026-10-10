@@ -1,0 +1,2 @@
+ok - completion handoffs stay main-owned while attended, including a line appended during the branch turn
+all exact completion-owner tests passed

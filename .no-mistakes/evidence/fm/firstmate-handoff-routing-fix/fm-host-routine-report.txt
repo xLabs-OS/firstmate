@@ -1,0 +1,2 @@
+ok - a routine report cannot retire a pending handoff, and away posture leaves the obligation without unparking main
+all exact routine-report tests passed

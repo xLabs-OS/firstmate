@@ -1,0 +1,2 @@
+ok - Pi upgrades a routine report while a handoff remains open
+all exact Pi open-handoff tests passed
