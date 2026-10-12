@@ -1,0 +1,17 @@
+FM_TEST_BEGIN 2026-10-12T18:07:26Z tests/fm-backend-herdr-launcher-workspace-e2e.test.sh family=real-herdr-gated expected_gate_skip=herdr
+ok - real Herdr: lock contention refuses without creating a worker under the secondmate identity
+ok - real Herdr: releasing the same lock lets the retry create its own correctly labelled workspace
+ok - real Herdr: a task ID already prefixed fm- preserves its concise projected title and endpoint on relaunch
+ok - real Herdr: presentation opt-out still gives the worker its own task-labelled workspace
+ok - real Herdr: an actual secondmate-pane caller creates a dedicated worker using its injected launcher identity
+ok - real Herdr: relaunch preserves a surviving dedicated worker endpoint
+ok - real Herdr: proved-gone reclaim creates a dedicated replacement, never a parent tab
+ok - real Herdr: a legacy shared endpoint refuses relaunch without moving or closing it
+ok - real Herdr: a primary outside Herdr also creates a dedicated worker workspace
+ok - real Herdr: secondmate launch retains its own home-labelled workspace
+ok - real Herdr: exact worker cleanup preserves the parent, sibling pane, and active focus
+evidence: Herdr 0.9.3, isolated session fm-lab-worker-placement-31207-29826
+FM_TEST_END 2026-10-12T18:08:20Z tests/fm-backend-herdr-launcher-workspace-e2e.test.sh exit=0 duration_ms=54632 gate_skip=false
+FM_TEST_SUMMARY total=1 failed=0 skipped_gate=0 duration_ms=54719
+FM_TEST_SUMMARY_FAMILY family=real-herdr-gated count=1 duration_ms=54632 failed=0
+FM_TEST_SLOWEST rank=1 script=tests/fm-backend-herdr-launcher-workspace-e2e.test.sh duration_ms=54632
